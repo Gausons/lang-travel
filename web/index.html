@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Travel Planner Agent</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="bg-shape bg-shape-a"></div>
+    <div class="bg-shape bg-shape-b"></div>
+    <main class="page">
+      <header class="hero">
+        <h1>Travel Planner Agent</h1>
+        <p>录入周边点位，快速找公园散步，自动规划陌生城市路线。</p>
+      </header>
+
+      <section class="panel">
+        <h2>当前位置</h2>
+        <div class="grid-3">
+          <label>纬度(lat)<input id="ctx-lat" value="31.2304" /></label>
+          <label>经度(lon)<input id="ctx-lon" value="121.4737" /></label>
+          <label>城市<input id="ctx-city" value="上海" /></label>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>录入景点/公园</h2>
+        <div class="grid-4">
+          <label>名称<input id="add-name" placeholder="比如：静安公园" /></label>
+          <label>类别
+            <select id="add-category">
+              <option value="park">park</option>
+              <option value="attraction">attraction</option>
+            </select>
+          </label>
+          <label>纬度<input id="add-lat" placeholder="31.2" /></label>
+          <label>经度<input id="add-lon" placeholder="121.4" /></label>
+        </div>
+        <div class="grid-4">
+          <label>城市<input id="add-city" placeholder="上海" /></label>
+          <label>标签<input id="add-tags" placeholder="散步,亲子" /></label>
+          <label>建议时长(分钟)<input id="add-visit" value="60" /></label>
+          <label>评分<input id="add-score" value="4.5" /></label>
+        </div>
+        <div class="actions">
+          <button id="btn-add">录入点位</button>
+          <span id="add-msg" class="hint"></span>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>附近散步公园</h2>
+        <div class="actions">
+          <label>半径(km)<input id="park-radius" value="5" /></label>
+          <button id="btn-parks">查询附近公园</button>
+        </div>
+        <ul id="parks-result" class="list"></ul>
+      </section>
+
+      <section class="panel">
+        <h2>陌生地点路线规划</h2>
+        <div class="actions">
+          <label>可用时长(小时)<input id="route-hours" value="4" /></label>
+          <label>偏好
+            <select id="route-prefer">
+              <option value="mixed">mixed</option>
+              <option value="park">park</option>
+              <option value="attraction">attraction</option>
+            </select>
+          </label>
+          <button id="btn-route">生成路线</button>
+        </div>
+        <pre id="route-result" class="code"></pre>
+      </section>
+
+      <section class="panel">
+        <h2>Agent 对话</h2>
+        <div class="actions">
+          <input id="chat-message" class="chat-input" value="我想去散个步，找个附近公园" />
+          <button id="btn-chat">发送</button>
+        </div>
+        <pre id="chat-result" class="code"></pre>
+      </section>
+
+      <section class="panel">
+        <h2>已录入点位</h2>
+        <div class="actions">
+          <button id="btn-refresh">刷新点位列表</button>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>名称</th>
+              <th>类别</th>
+              <th>城市</th>
+              <th>坐标</th>
+              <th>评分</th>
+            </tr>
+          </thead>
+          <tbody id="place-body"></tbody>
+        </table>
+      </section>
+    </main>
+    <script type="module" src="/app.js"></script>
+  </body>
+  </html>
+
