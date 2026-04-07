@@ -97,7 +97,16 @@ pnpm start -- list
 
 ```bash
 export AMAP_KEY=你的高德Web服务Key
+export AMAP_JS_KEY=你的高德JSAPI Key
 pnpm dev:web
+```
+
+或写入项目根目录 `.env`（服务会自动加载）：
+
+```bash
+AMAP_KEY=你的高德Web服务Key
+AMAP_JS_KEY=你的高德JSAPI Key
+AMAP_SECURITY_JS_CODE=你的安全密钥(可选)
 ```
 
 打开：`http://localhost:3000`
@@ -113,6 +122,8 @@ pnpm dev:web
 ## 高德地图接入说明
 
 - 需要高德开放平台 Web 服务 Key（环境变量：`AMAP_KEY`）
+- 地图展示需要 JS API Key（环境变量：`AMAP_JS_KEY`，未设置时回退用 `AMAP_KEY`）
+- 如启用了高德安全密钥，可配置：`AMAP_SECURITY_JS_CODE`
 - 已接入能力：
   - `/api/parks`：优先调用高德周边公园检索，失败自动回退本地数据
   - `/api/route`：对本地规划结果的交通段，按高德步行路线时长做校准

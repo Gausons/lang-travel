@@ -9,8 +9,43 @@ import type { Category, Prefer } from './types.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const ROOT_DIR = path.resolve(__dirname, '..');
 const WEB_DIR = path.join(__dirname, '..', 'web');
 const PORT = Number(process.env.PORT ?? 3000);
+
+function loadDotEnv(): void {
+  const envPath = path.join(ROOT_DIR, '.env');
+  if (!fs.existsSync(envPath)) {
+    return;
+  }
+  const lines = fs.readFileSync(envPath, 'utf-8').split(/\r?\n/);
+  for (const lineRaw of lines) {
+    const line = lineRaw.trim();
+    if (!line || line.startsWith('#')) {
+      continue;
+    }
+    const idx = line.indexOf('=');
+    if (idx <= 0) {
+      continue;
+    }
+    const key = line.slice(0, idx).trim();
+    let value = line.slice(idx + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    if (!(key in process.env)) {
+      process.env[key] = value;
+    }
+  }
+}
+
+loadDotEnv();
+
+const AMAP_JS_KEY = process.env.AMAP_JS_KEY ?? process.env.AMAP_KEY ?? '';
+const AMAP_SECURITY_JS_CODE = process.env.AMAP_SECURITY_JS_CODE ?? '';
 
 const agent = new TravelPlannerAgent();
 const amap = new AmapClient(process.env.AMAP_KEY);
@@ -88,6 +123,15 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 200, {
         ok: true,
         now: new Date().toISOString(),
+        amapEnabled: amap.enabled,
+      });
+      return;
+    }
+
+    if (pathname === '/api/client-config') {
+      sendJson(res, 200, {
+        amapJsKey: AMAP_JS_KEY,
+        amapSecurityJsCode: AMAP_SECURITY_JS_CODE,
         amapEnabled: amap.enabled,
       });
       return;
