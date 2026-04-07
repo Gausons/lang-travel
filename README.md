@@ -104,8 +104,8 @@ pnpm dev:web
 或写入项目根目录 `.env`（服务会自动加载）：
 
 ```bash
-AMAP_KEY=你的高德Web服务Key
-AMAP_JS_KEY=你的高德JSAPI Key
+AMAP_KEY=你的高德Web服务Key(用于后端HTTP接口，如逆地理编码/路线/POI)
+AMAP_JS_KEY=你的高德JSAPI Key(用于前端地图渲染)
 AMAP_SECURITY_JS_CODE=你的安全密钥(可选)
 ```
 
@@ -140,4 +140,4 @@ curl "http://127.0.0.1:3000/api/parks?lat=31.2304&lon=121.4737&city=%E4%B8%8A%E6
 ## 数据文件
 
 - 点位持久化在 `data/places.json`
-- 首次运行会自动写入少量示例点位
+- 默认不再预置写死景点；页面会优先按当前位置从高德拉取实时点位

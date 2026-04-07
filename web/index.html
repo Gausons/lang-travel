@@ -7,7 +7,27 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
+    <div id="fatal" style="display:none;padding:10px 14px;background:#ffe9e9;color:#8a1f1f;font-size:13px;"></div>
     <main class="layout">
+      <section class="map-shell">
+        <div id="map"></div>
+        <button id="btn-refresh" class="float-btn">刷新点位</button>
+        <div class="place-panel">
+          <div class="place-panel-head">已加载点位</div>
+          <table class="place-table">
+            <thead>
+              <tr>
+                <th>名称</th>
+                <th>类别</th>
+                <th>城市</th>
+                <th>坐标</th>
+              </tr>
+            </thead>
+            <tbody id="place-body"></tbody>
+          </table>
+        </div>
+      </section>
+
       <aside class="sidebar">
         <header class="brand">
           <h1>Lang Travel</h1>
@@ -23,7 +43,7 @@
             <label>纬度<input id="ctx-lat" value="31.2304" /></label>
             <label>经度<input id="ctx-lon" value="121.4737" /></label>
           </div>
-          <label>城市<input id="ctx-city" value="上海" /></label>
+          <label>城市<input id="ctx-city" value="" placeholder="定位后自动回填" /></label>
           <div class="chips">
             <span id="chip-map" class="chip">地图: 初始化中</span>
             <span id="chip-source" class="chip">数据源: local</span>
@@ -56,7 +76,7 @@
           <pre id="route-result" class="code"></pre>
         </section>
 
-        <section class="card">
+        <section class="card card-add">
           <h2>录入点位</h2>
           <label>名称<input id="add-name" placeholder="比如：静安公园" /></label>
           <div class="grid-2">
@@ -81,22 +101,6 @@
           <p id="add-msg" class="hint"></p>
         </section>
       </aside>
-
-      <section class="map-shell">
-        <div id="map"></div>
-        <button id="btn-refresh" class="float-btn">刷新点位</button>
-        <table class="place-table">
-          <thead>
-            <tr>
-              <th>名称</th>
-              <th>类别</th>
-              <th>城市</th>
-              <th>坐标</th>
-            </tr>
-          </thead>
-          <tbody id="place-body"></tbody>
-        </table>
-      </section>
     </main>
     <script type="module" src="/app.js"></script>
   </body>

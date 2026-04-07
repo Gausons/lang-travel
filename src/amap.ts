@@ -26,6 +26,18 @@ type AmapWalkResp = {
   route?: { paths?: AmapWalkPath[] };
 };
 
+type AmapRegeoResp = {
+  status?: string;
+  info?: string;
+  regeocode?: {
+    addressComponent?: {
+      city?: string | string[];
+      province?: string;
+      district?: string;
+    };
+  };
+};
+
 export type AmapNearbyPark = {
   id: string;
   name: string;
@@ -36,10 +48,27 @@ export type AmapNearbyPark = {
   type: string;
 };
 
+export type AmapNearbySpot = {
+  id: string;
+  name: string;
+  lat: number;
+  lon: number;
+  distanceKm: number;
+  address: string;
+  type: string;
+  category: 'park' | 'attraction';
+};
+
 export type AmapWalkingLeg = {
   distanceM: number;
   durationSec: number;
   steps: string[];
+};
+
+export type AmapCityResult = {
+  city: string;
+  province: string;
+  district: string;
 };
 
 function splitLocation(location: string): { lon: number; lat: number } | null {
@@ -82,10 +111,29 @@ export class AmapClient {
   }
 
   async searchNearbyParks(lat: number, lon: number, radiusKm = 3, city?: string): Promise<AmapNearbyPark[]> {
+    const spots = await this.searchNearbySpots(lat, lon, radiusKm, city, '公园');
+    return spots.map((s) => ({
+      id: s.id,
+      name: s.name,
+      lat: s.lat,
+      lon: s.lon,
+      distanceKm: s.distanceKm,
+      address: s.address,
+      type: s.type,
+    }));
+  }
+
+  async searchNearbySpots(
+    lat: number,
+    lon: number,
+    radiusKm = 3,
+    city?: string,
+    keywords = '景点',
+  ): Promise<AmapNearbySpot[]> {
     const radiusMeter = String(Math.min(50000, Math.max(500, Math.round(radiusKm * 1000))));
     const data = await this.getJson<AmapPlaceAroundResp>('/v3/place/around', {
       location: `${lon},${lat}`,
-      keywords: '公园',
+      keywords,
       sortrule: 'distance',
       radius: radiusMeter,
       offset: '20',
@@ -99,7 +147,7 @@ export class AmapClient {
       throw new Error(`高德 POI 检索失败: ${data.info ?? 'unknown'}`);
     }
 
-    const parks: AmapNearbyPark[] = [];
+    const spots: AmapNearbySpot[] = [];
     for (const poi of data.pois ?? []) {
       if (!poi.name || !poi.location) {
         continue;
@@ -109,7 +157,9 @@ export class AmapClient {
         continue;
       }
       const distanceM = Number(poi.distance ?? '0');
-      parks.push({
+      const name = poi.name;
+      const category = /公园/.test(name) || /公园/.test(poi.type ?? '') ? 'park' : 'attraction';
+      spots.push({
         id: poi.id ?? `amap_${poi.name}`,
         name: poi.name,
         lat: location.lat,
@@ -117,9 +167,10 @@ export class AmapClient {
         distanceKm: Number((distanceM / 1000).toFixed(2)),
         address: poi.address ?? '',
         type: poi.type ?? poi.typecode ?? '',
+        category,
       });
     }
-    return parks;
+    return spots;
   }
 
   async walkingRoute(
@@ -147,5 +198,26 @@ export class AmapClient {
     const steps = (path.steps ?? []).map((s) => s.instruction ?? '').filter(Boolean);
     return { distanceM, durationSec, steps };
   }
-}
 
+  async reverseGeocode(lat: number, lon: number): Promise<AmapCityResult | null> {
+    const data = await this.getJson<AmapRegeoResp>('/v3/geocode/regeo', {
+      location: `${lon},${lat}`,
+      extensions: 'base',
+    });
+    if (data.status !== '1') {
+      throw new Error(`高德逆地理编码失败: ${data.info ?? 'unknown'}`);
+    }
+    const comp = data.regeocode?.addressComponent;
+    if (!comp) {
+      return null;
+    }
+    const cityRaw = comp.city;
+    const city =
+      (Array.isArray(cityRaw) ? cityRaw[0] : cityRaw) || comp.province || comp.district || '';
+    return {
+      city: String(city).replace(/市$/, ''),
+      province: String(comp.province ?? '').replace(/市$/, ''),
+      district: String(comp.district ?? ''),
+    };
+  }
+}

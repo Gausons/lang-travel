@@ -22,59 +22,7 @@ export class PlaceStore {
   }
 
   private seed(): void {
-    const now = new Date().toISOString();
-    const places: Place[] = [
-      {
-        id: 'p_001',
-        name: '世纪公园',
-        category: 'park',
-        lat: 31.2214,
-        lon: 121.5442,
-        city: '上海',
-        tags: ['散步', '绿地', '亲子'],
-        avg_visit_min: 90,
-        score: 4.7,
-        created_at: now,
-      },
-      {
-        id: 'p_002',
-        name: '鲁迅公园',
-        category: 'park',
-        lat: 31.2797,
-        lon: 121.4838,
-        city: '上海',
-        tags: ['散步', '晨练', '本地'],
-        avg_visit_min: 60,
-        score: 4.5,
-        created_at: now,
-      },
-      {
-        id: 'a_001',
-        name: '外滩',
-        category: 'attraction',
-        lat: 31.24,
-        lon: 121.49,
-        city: '上海',
-        tags: ['地标', '夜景', '拍照'],
-        avg_visit_min: 80,
-        score: 4.8,
-        created_at: now,
-      },
-      {
-        id: 'a_002',
-        name: '豫园',
-        category: 'attraction',
-        lat: 31.2273,
-        lon: 121.4925,
-        city: '上海',
-        tags: ['历史', '园林', '美食'],
-        avg_visit_min: 100,
-        score: 4.6,
-        created_at: now,
-      },
-    ];
-
-    this.save(places);
+    this.save([]);
   }
 
   private load(): Place[] {
@@ -129,4 +77,3 @@ export class PlaceStore {
     return places.filter((p) => p.city === city);
   }
 }
-

@@ -1,5 +1,14 @@
 const $ = (id) => document.getElementById(id);
 
+function showFatal(message) {
+  const el = $('fatal');
+  if (!el) {
+    return;
+  }
+  el.style.display = 'block';
+  el.textContent = `页面初始化失败: ${message}`;
+}
+
 const state = {
   map: null,
   amapReady: false,
@@ -27,8 +36,127 @@ function setCtx(lat, lon, city) {
   }
 }
 
+function normalizeCityName(name) {
+  return String(name || '').replace(/市$/, '').trim();
+}
+
+async function convertGpsToGcj(lat, lon) {
+  if (!window.AMap || !state.map || typeof window.AMap.convertFrom !== 'function') {
+    return { lat, lon };
+  }
+  try {
+    const out = await new Promise((resolve, reject) => {
+      window.AMap.convertFrom([lon, lat], 'gps', (status, result) => {
+        if (status === 'complete' && result?.locations?.[0]) {
+          resolve(result.locations[0]);
+        } else {
+          reject(new Error('坐标转换失败'));
+        }
+      });
+    });
+    return {
+      lat: Number(out.lat.toFixed(6)),
+      lon: Number(out.lng.toFixed(6)),
+    };
+  } catch {
+    return { lat, lon };
+  }
+}
+
+async function syncCityByCoord(lat, lon) {
+  const setCity = (name) => {
+    const city = normalizeCityName(name);
+    if (city) {
+      setCtx(lat, lon, city);
+    }
+    return city;
+  };
+
+  try {
+    const resp = await api(`/api/regeo?lat=${lat}&lon=${lon}`);
+    if (resp.city) {
+      setCity(resp.city);
+      setChip('chip-locate', `定位: 城市回填(regeo:${normalizeCityName(resp.city)})`);
+      return;
+    }
+  } catch {
+    // ignore and fallback to js geocoder
+  }
+
+  if (!window.AMap || !state.map) {
+    setCtx(lat, lon, $('ctx-city').value.trim());
+    return;
+  }
+  try {
+    const comp = await new Promise((resolve, reject) => {
+      window.AMap.plugin('AMap.Geocoder', () => {
+        const geocoder = new window.AMap.Geocoder({});
+        geocoder.getAddress([lon, lat], (status, res) => {
+          if (status === 'complete' && res?.regeocode?.addressComponent) {
+            resolve(res.regeocode.addressComponent);
+          } else {
+            reject(new Error('逆地理编码失败'));
+          }
+        });
+      });
+    });
+    const city = setCity(comp.city || comp.province || comp.district || '');
+    if (!city) {
+      setCtx(lat, lon, $('ctx-city').value.trim());
+    } else {
+      setChip('chip-locate', `定位: 城市回填(geocoder:${city})`);
+    }
+  } catch {
+    setCtx(lat, lon, $('ctx-city').value.trim());
+  }
+
+  // 某些环境定位刚成功时逆地理编码会短暂拿不到结果，补一次延迟重试
+  if (!$('ctx-city').value.trim()) {
+    await new Promise((r) => setTimeout(r, 350));
+    try {
+      const resp = await api(`/api/regeo?lat=${lat}&lon=${lon}`);
+      if (resp.city) {
+        const city = setCity(resp.city);
+        if (city) {
+          setChip('chip-locate', `定位: 城市回填(regeo:${city})`);
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // 最后兜底：按本地城市/IP回填，避免输入框为空
+  if (!$('ctx-city').value.trim() && window.AMap && state.map) {
+    try {
+      const localCity = await new Promise((resolve, reject) => {
+        window.AMap.plugin('AMap.CitySearch', () => {
+          const citySearch = new window.AMap.CitySearch();
+          citySearch.getLocalCity((status, result) => {
+            if (status === 'complete' && result?.city) {
+              resolve(result);
+            } else {
+              reject(new Error('CitySearch failed'));
+            }
+          });
+        });
+      });
+      const city = normalizeCityName(localCity.city);
+      if (city) {
+        setCtx(lat, lon, city);
+        setChip('chip-locate', `定位: 城市回填(citySearch:${city})`);
+      }
+    } catch {
+      // ignore
+    }
+  }
+}
+
 function setChip(id, text) {
-  $(id).textContent = text;
+  const el = $(id);
+  if (el) {
+    el.textContent = text;
+  }
 }
 
 async function api(url, options) {
@@ -36,7 +164,13 @@ async function api(url, options) {
     headers: { 'content-type': 'application/json' },
     ...options,
   });
-  const data = await res.json();
+  const text = await res.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(`接口返回非 JSON: ${url}`);
+  }
   if (!res.ok) {
     throw new Error(data.error || '请求失败');
   }
@@ -146,7 +280,7 @@ async function locateCurrent() {
   };
 
   const applyLocation = (lat, lon) => {
-    setCtx(lat, lon);
+    setCtx(lat, lon, $('ctx-city').value.trim());
     ensureMyMarker(lat, lon);
     centerMap(lat, lon, 15);
   };
@@ -248,9 +382,11 @@ async function locateCurrent() {
   try {
     // 先尝试持续监听，通常比 getCurrentPosition 更容易拿到首个有效结果
     const watchPos = await locateByWatch();
-    const lat = Number(watchPos.coords.latitude.toFixed(6));
-    const lon = Number(watchPos.coords.longitude.toFixed(6));
-    applyLocation(lat, lon);
+    const rawLat = Number(watchPos.coords.latitude.toFixed(6));
+    const rawLon = Number(watchPos.coords.longitude.toFixed(6));
+    const converted = await convertGpsToGcj(rawLat, rawLon);
+    applyLocation(converted.lat, converted.lon);
+    await syncCityByCoord(converted.lat, converted.lon);
     setChip('chip-locate', '定位: 浏览器GPS');
     return;
   } catch (err) {
@@ -262,9 +398,11 @@ async function locateCurrent() {
           maximumAge: 0,
         });
       });
-      const lat = Number(position.coords.latitude.toFixed(6));
-      const lon = Number(position.coords.longitude.toFixed(6));
-      applyLocation(lat, lon);
+      const rawLat = Number(position.coords.latitude.toFixed(6));
+      const rawLon = Number(position.coords.longitude.toFixed(6));
+      const converted = await convertGpsToGcj(rawLat, rawLon);
+      applyLocation(converted.lat, converted.lon);
+      await syncCityByCoord(converted.lat, converted.lon);
       setChip('chip-locate', '定位: 浏览器GPS');
       return;
     } catch {
@@ -273,6 +411,10 @@ async function locateCurrent() {
 
     try {
       await fallbackByAmap();
+      await syncCityByCoord(
+        Number($('ctx-lat').value),
+        Number($('ctx-lon').value),
+      );
       setChip('chip-locate', '定位: 高德精准');
     } catch (amapErr) {
       try {
@@ -290,9 +432,19 @@ async function locateCurrent() {
 }
 
 async function refreshPlaces() {
-  const { city } = getCtx();
-  const qs = city ? `?city=${encodeURIComponent(city)}` : '';
-  const { places } = await api(`/api/places${qs}`);
+  const { city, lat, lon } = getCtx();
+  const qs = new URLSearchParams({
+    city,
+    lat: String(lat),
+    lon: String(lon),
+    radiusKm: '8',
+  }).toString();
+  const resp = await api(`/api/places?${qs}`);
+  const places = resp.places || [];
+  if (resp.source) {
+    state.source = resp.source;
+    setChip('chip-source', `数据源: ${state.source}`);
+  }
 
   const body = $('place-body');
   body.innerHTML = '';
@@ -323,12 +475,22 @@ async function refreshPlaces() {
 }
 
 async function addPlace() {
+  const ctx = getCtx();
+  const addLatRaw = $('add-lat').value.trim();
+  const addLonRaw = $('add-lon').value.trim();
+  const lat = addLatRaw ? Number(addLatRaw) : ctx.lat;
+  const lon = addLonRaw ? Number(addLonRaw) : ctx.lon;
+
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+    throw new Error('请填写有效经纬度，或先完成当前位置定位');
+  }
+
   const payload = {
     name: $('add-name').value.trim(),
     category: $('add-category').value,
-    lat: Number($('add-lat').value),
-    lon: Number($('add-lon').value),
-    city: $('add-city').value.trim() || getCtx().city,
+    lat,
+    lon,
+    city: $('add-city').value.trim() || ctx.city,
     tags: $('add-tags')
       .value.split(',')
       .map((s) => s.trim())
@@ -440,19 +602,19 @@ async function planRoute() {
 }
 
 function bind() {
-  $('btn-locate').addEventListener('click', () =>
+  $('btn-locate')?.addEventListener('click', () =>
     locateCurrent().catch((e) => alert(e.message)),
   );
-  $('btn-refresh').addEventListener('click', () =>
+  $('btn-refresh')?.addEventListener('click', () =>
     refreshPlaces().catch((e) => alert(e.message)),
   );
-  $('btn-add').addEventListener('click', () =>
+  $('btn-add')?.addEventListener('click', () =>
     addPlace().catch((e) => alert(e.message)),
   );
-  $('btn-parks').addEventListener('click', () =>
+  $('btn-parks')?.addEventListener('click', () =>
     queryParks().catch((e) => alert(e.message)),
   );
-  $('btn-route').addEventListener('click', () =>
+  $('btn-route')?.addEventListener('click', () =>
     planRoute().catch((e) => alert(e.message)),
   );
 }
@@ -464,7 +626,27 @@ async function boot() {
   } catch {
     // 地图加载失败时，仍然允许侧边栏功能可用
   }
+  try {
+    // 页面首次打开时，自动将默认位置切到当前位置
+    await locateCurrent();
+  } catch {
+    // 自动定位失败时不弹框，保留手动点击“定位”
+  }
   await refreshPlaces();
 }
 
-boot().catch((e) => alert(e.message));
+window.addEventListener('error', (e) => {
+  showFatal(e.message || '未知脚本错误');
+});
+window.addEventListener('unhandledrejection', (e) => {
+  const msg = e.reason?.message || String(e.reason || '未知 Promise 错误');
+  showFatal(msg);
+});
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => {
+    boot().catch((e) => showFatal(e.message || '启动失败'));
+  });
+} else {
+  boot().catch((e) => showFatal(e.message || '启动失败'));
+}
