@@ -6,6 +6,10 @@ type AmapPoi = {
   distance?: string;
   type?: string;
   typecode?: string;
+  biz_ext?: {
+    cost?: string;
+    rating?: string;
+  };
 };
 
 type AmapPlaceAroundResp = {
@@ -63,12 +67,24 @@ export type AmapWalkingLeg = {
   distanceM: number;
   durationSec: number;
   steps: string[];
+  polylines: Array<Array<[number, number]>>;
 };
 
 export type AmapCityResult = {
   city: string;
   province: string;
   district: string;
+};
+
+export type AmapHotelOption = {
+  id: string;
+  name: string;
+  lat: number;
+  lon: number;
+  distanceKm: number;
+  address: string;
+  priceCny: number | null;
+  rating: number | null;
 };
 
 function splitLocation(location: string): { lon: number; lat: number } | null {
@@ -79,6 +95,24 @@ function splitLocation(location: string): { lon: number; lat: number } | null {
     return null;
   }
   return { lat, lon };
+}
+
+function parsePolyline(polyline?: string): Array<[number, number]> {
+  if (!polyline) {
+    return [];
+  }
+  return polyline
+    .split(';')
+    .map((pair) => {
+      const [lonRaw, latRaw] = pair.split(',');
+      const lon = Number(lonRaw);
+      const lat = Number(latRaw);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+        return null;
+      }
+      return [lon, lat] as [number, number];
+    })
+    .filter((x): x is [number, number] => Boolean(x));
 }
 
 export class AmapClient {
@@ -173,6 +207,56 @@ export class AmapClient {
     return spots;
   }
 
+  async searchNearbyHotels(
+    lat: number,
+    lon: number,
+    radiusKm = 5,
+    city?: string,
+  ): Promise<AmapHotelOption[]> {
+    const radiusMeter = String(Math.min(50000, Math.max(1000, Math.round(radiusKm * 1000))));
+    const data = await this.getJson<AmapPlaceAroundResp>('/v3/place/around', {
+      location: `${lon},${lat}`,
+      keywords: '酒店',
+      sortrule: 'distance',
+      radius: radiusMeter,
+      offset: '30',
+      page: '1',
+      city: city ?? '',
+      citylimit: city ? 'true' : 'false',
+      extensions: 'all',
+      types: '100000',
+    });
+
+    if (data.status !== '1') {
+      throw new Error(`高德酒店检索失败: ${data.info ?? 'unknown'}`);
+    }
+
+    const hotels: AmapHotelOption[] = [];
+    for (const poi of data.pois ?? []) {
+      if (!poi.name || !poi.location) {
+        continue;
+      }
+      const location = splitLocation(poi.location);
+      if (!location) {
+        continue;
+      }
+      const distanceM = Number(poi.distance ?? '0');
+      const cost = Number(poi.biz_ext?.cost ?? '');
+      const rating = Number(poi.biz_ext?.rating ?? '');
+      hotels.push({
+        id: poi.id ?? `amap_hotel_${poi.name}`,
+        name: poi.name,
+        lat: location.lat,
+        lon: location.lon,
+        distanceKm: Number((distanceM / 1000).toFixed(2)),
+        address: poi.address ?? '',
+        priceCny: Number.isFinite(cost) && cost > 0 ? Number(cost.toFixed(0)) : null,
+        rating: Number.isFinite(rating) && rating > 0 ? Number(rating.toFixed(1)) : null,
+      });
+    }
+    return hotels;
+  }
+
   async walkingRoute(
     originLat: number,
     originLon: number,
@@ -196,7 +280,10 @@ export class AmapClient {
     const distanceM = Number(path.distance ?? '0');
     const durationSec = Number(path.duration ?? '0');
     const steps = (path.steps ?? []).map((s) => s.instruction ?? '').filter(Boolean);
-    return { distanceM, durationSec, steps };
+    const polylines = (path.steps ?? [])
+      .map((s) => parsePolyline(s.polyline))
+      .filter((line) => line.length > 1);
+    return { distanceM, durationSec, steps, polylines };
   }
 
   async reverseGeocode(lat: number, lon: number): Promise<AmapCityResult | null> {

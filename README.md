@@ -17,6 +17,7 @@
 - `src/types.ts`: 领域类型定义
 - `src/store.ts`: 点位数据读写与初始化
 - `src/planner.ts`: 规划核心逻辑（附近公园、路线、chat 意图）
+- `src/multi-agent.ts`: 多 Agent 编排（行程研究、酒店多源比价、预算优化）
 - `src/cli.ts`: 命令行参数解析和命令分发
 - `src/agent.ts`: 入口文件（错误处理 + 启动 CLI）
 - `src/index.ts`: 复用导出（便于后续接 API）
@@ -107,6 +108,8 @@ pnpm dev:web
 AMAP_KEY=你的高德Web服务Key(用于后端HTTP接口，如逆地理编码/路线/POI)
 AMAP_JS_KEY=你的高德JSAPI Key(用于前端地图渲染)
 AMAP_SECURITY_JS_CODE=你的安全密钥(可选)
+OPENAI_API_KEY=你的OpenAI API Key(可选，用于AI全局优化决策)
+OPENAI_MODEL=gpt-4.1-mini(可选)
 ```
 
 打开：`http://localhost:3000`
@@ -116,6 +119,7 @@ AMAP_SECURITY_JS_CODE=你的安全密钥(可选)
 - 录入景点/公园
 - 查询附近散步公园
 - 生成陌生地点路线规划
+- Agent 一键自主规划（行程 + 酒店筛选比价）
 - 对话式调用 Agent
 - 查看当前城市已录入点位
 
@@ -126,7 +130,10 @@ AMAP_SECURITY_JS_CODE=你的安全密钥(可选)
 - 如启用了高德安全密钥，可配置：`AMAP_SECURITY_JS_CODE`
 - 已接入能力：
   - `/api/parks`：优先调用高德周边公园检索，失败自动回退本地数据
-  - `/api/route`：对本地规划结果的交通段，按高德步行路线时长做校准
+- `/api/route`：对本地规划结果的交通段，按高德步行路线时长做校准
+- `/api/agent/plan`：多 Agent 自主规划（多源酒店比价 + 最经济方案）
+  - 若配置 `OPENAI_API_KEY`：由 AI 基于用户习惯/预算/候选信息做全局优化
+  - 若 AI 调用失败：自动回退贪心结果（稳定兜底）
   - `/api/health`：返回 `amapEnabled` 字段，方便检查是否生效
 
 示例：

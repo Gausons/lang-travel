@@ -4,6 +4,7 @@ import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import { fileURLToPath } from 'node:url';
 
 import { AmapClient } from './amap.js';
+import { MultiAgentOrchestrator } from './multi-agent.js';
 import { TravelPlannerAgent } from './planner.js';
 import type { Category, Place, Prefer, RouteResult, RouteStop } from './types.js';
 
@@ -50,6 +51,7 @@ const AMAP_SERVICE_KEY = process.env.AMAP_KEY ?? '';
 
 const agent = new TravelPlannerAgent();
 const amap = new AmapClient(AMAP_SERVICE_KEY);
+const orchestrator = new MultiAgentOrchestrator({ amap, planner: agent });
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -449,6 +451,7 @@ const server = http.createServer(async (req, res) => {
       let currentLat = lat;
       let currentLon = lon;
       let totalMinutes = 0;
+      const routePolylines: Array<Array<[number, number]>> = [];
 
       for (const stop of result.stops) {
         try {
@@ -457,6 +460,7 @@ const server = http.createServer(async (req, res) => {
             stop.travel_mode = 'walk';
             stop.travel_min = Math.max(1, Math.round(leg.durationSec / 60));
             stop.distance_km = Number((leg.distanceM / 1000).toFixed(2));
+            routePolylines.push(...leg.polylines);
           }
         } catch {
           // 某段失败时保留本地估算值
@@ -471,7 +475,45 @@ const server = http.createServer(async (req, res) => {
         total_minutes: totalMinutes,
         summary: `${result.summary}（交通时长已按高德步行路线校准）`,
         source: 'amap',
+        routePolylines,
       });
+      return;
+    }
+
+    if (pathname === '/api/agent/plan' && req.method === 'POST') {
+      const body = (await readBody(req)) as {
+        lat?: number;
+        lon?: number;
+        city?: string;
+        days?: number;
+        dailyHours?: number;
+        interests?: string[];
+        habits?: string[];
+        totalBudgetCny?: number;
+        hotelBudgetPerNight?: number;
+        prefer?: Prefer;
+      };
+      if (body.lat === undefined || body.lon === undefined) {
+        sendJson(res, 400, { error: 'lat/lon 为必填' });
+        return;
+      }
+      const result = await orchestrator.run({
+        lat: Number(body.lat),
+        lon: Number(body.lon),
+        city: (body.city ?? '').trim(),
+        days: Math.max(1, Math.min(7, Math.floor(Number(body.days ?? 2)))),
+        dailyHours: Math.max(2, Math.min(12, Number(body.dailyHours ?? 6))),
+        interests: Array.isArray(body.interests)
+          ? body.interests.map((s) => String(s).trim()).filter(Boolean)
+          : [],
+        habits: Array.isArray(body.habits)
+          ? body.habits.map((s) => String(s).trim()).filter(Boolean)
+          : [],
+        totalBudgetCny: Number(body.totalBudgetCny ?? 3000),
+        hotelBudgetPerNight: Number(body.hotelBudgetPerNight ?? 600),
+        prefer: (body.prefer ?? 'mixed') as Prefer,
+      });
+      sendJson(res, 200, result);
       return;
     }
 

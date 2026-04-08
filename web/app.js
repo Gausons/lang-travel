@@ -556,6 +556,37 @@ function drawRoutePolyline(points) {
   state.routeLines.push(line);
 }
 
+function renderRouteOnMap(startLon, startLat, stops, routePolylines) {
+  if (!state.map || !window.AMap) {
+    return;
+  }
+  clearOverlays('routeMarkers');
+  clearOverlays('routeLines');
+
+  const routePoints = [[startLon, startLat]];
+  stops.forEach((s, idx) => {
+    routePoints.push([s.lon, s.lat]);
+    const marker = new window.AMap.Marker({
+      position: [s.lon, s.lat],
+      title: `${idx + 1}. ${s.name}`,
+      label: { content: `${idx + 1}`, direction: 'top' },
+      icon: 'https://a.amap.com/jsapi_demos/static/demo-center/icons/poi-marker-blue.png',
+    });
+    state.routeMarkers.push(marker);
+  });
+  state.map.add(state.routeMarkers);
+
+  if (Array.isArray(routePolylines) && routePolylines.length > 0) {
+    routePolylines.forEach((line) => drawRoutePolyline(line));
+  } else {
+    drawRoutePolyline(routePoints);
+  }
+
+  state.map.setFitView([state.myMarker, ...state.routeMarkers, ...state.routeLines], false, [
+    80, 60, 260, 60,
+  ]);
+}
+
 async function planRoute() {
   const { lat, lon, city } = getCtx();
   const hours = Number($('route-hours').value || 4);
@@ -581,24 +612,70 @@ async function planRoute() {
   if (!state.map || !window.AMap) {
     return;
   }
-  clearOverlays('routeMarkers');
-  clearOverlays('routeLines');
-  const routePoints = [[lon, lat]];
-  result.stops.forEach((s, idx) => {
-    routePoints.push([s.lon, s.lat]);
-    const marker = new window.AMap.Marker({
-      position: [s.lon, s.lat],
-      title: `${idx + 1}. ${s.name}`,
-      label: { content: `${idx + 1}`, direction: 'top' },
-      icon: 'https://a.amap.com/jsapi_demos/static/demo-center/icons/poi-marker-blue.png',
-    });
-    state.routeMarkers.push(marker);
+  renderRouteOnMap(lon, lat, result.stops, result.routePolylines);
+}
+
+async function runAgentPlan() {
+  const { lat, lon, city } = getCtx();
+  const days = Number($('agent-days').value || 2);
+  const dailyHours = Number($('agent-hours').value || 6);
+  const totalBudgetCny = Number($('agent-budget-total').value || 3000);
+  const hotelBudgetPerNight = Number($('agent-budget-hotel').value || 600);
+  const interests = $('agent-interests')
+    .value.split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const habits = $('agent-habits')
+    .value.split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const prefer = $('route-prefer').value;
+
+  const result = await api('/api/agent/plan', {
+    method: 'POST',
+    body: JSON.stringify({
+      lat,
+      lon,
+      city,
+      days,
+      dailyHours,
+      interests,
+      habits,
+      totalBudgetCny,
+      hotelBudgetPerNight,
+      prefer,
+    }),
   });
-  state.map.add(state.routeMarkers);
-  drawRoutePolyline(routePoints);
-  state.map.setFitView([state.myMarker, ...state.routeMarkers, ...state.routeLines], false, [
-    80, 60, 260, 60,
-  ]);
+
+  const lines = [result.summary, '', '行程建议:'];
+  result.route.stops.forEach((s, i) => {
+    lines.push(
+      `${i + 1}. ${s.name} | ${s.distance_km}km | ${s.travel_min}分钟 + 游玩${s.visit_min}分钟`,
+    );
+  });
+  lines.push('', '酒店比价:');
+  result.hotels.forEach((h) => {
+    const offerText = Array.isArray(h.offers)
+      ? h.offers
+          .map((o) => `${o.source}:${o.priceCny ? `¥${o.priceCny}` : 'N/A'}`)
+          .join(' / ')
+      : '';
+    lines.push(
+      `${h.rank}. ${h.name} | 最低${h.bestPriceCny ? `¥${h.bestPriceCny}` : 'N/A'}(${
+        h.bestSource || 'unknown'
+      }) | 评分${h.rating ?? 'N/A'} | ${h.distanceKm}km`,
+    );
+    if (offerText) {
+      lines.push(`   报价源: ${offerText}`);
+    }
+  });
+  if (Array.isArray(result.executionTrace) && result.executionTrace.length > 0) {
+    lines.push('', 'Agent 执行链路:');
+    result.executionTrace.forEach((t) => lines.push(`- ${t}`));
+  }
+  $('agent-result').textContent = lines.join('\n');
+
+  renderRouteOnMap(lon, lat, result.route.stops, result.route.routePolylines);
 }
 
 function bind() {
@@ -616,6 +693,9 @@ function bind() {
   );
   $('btn-route')?.addEventListener('click', () =>
     planRoute().catch((e) => alert(e.message)),
+  );
+  $('btn-agent-plan')?.addEventListener('click', () =>
+    runAgentPlan().catch((e) => alert(e.message)),
   );
 }
 

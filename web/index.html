@@ -76,6 +76,24 @@
           <pre id="route-result" class="code"></pre>
         </section>
 
+        <section class="card">
+          <h2>Agent 自主规划</h2>
+          <div class="grid-2">
+            <label>天数<input id="agent-days" value="2" /></label>
+            <label>每日时长(h)<input id="agent-hours" value="6" /></label>
+          </div>
+          <div class="grid-2">
+            <label>总预算(¥)<input id="agent-budget-total" value="3000" /></label>
+            <label>酒店预算/晚(¥)<input id="agent-budget-hotel" value="600" /></label>
+          </div>
+          <label>偏好标签(逗号分隔)<input id="agent-interests" value="公园,美食,地标" /></label>
+          <label>用户习惯(逗号分隔)<input id="agent-habits" value="早起,步行可接受,地铁优先" /></label>
+          <div class="row">
+            <button id="btn-agent-plan">一键自主规划</button>
+          </div>
+          <pre id="agent-result" class="code"></pre>
+        </section>
+
         <section class="card card-add">
           <h2>录入点位</h2>
           <label>名称<input id="add-name" placeholder="比如：静安公园" /></label>
