@@ -1,9 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 import { AmapClient } from './amap.js';
+import { log } from './logger.js';
 import { MultiAgentOrchestrator } from './multi-agent.js';
 import { TravelPlannerAgent } from './planner.js';
 import type { Category, Place, Prefer, RouteResult, RouteStop } from './types.js';
@@ -183,9 +185,19 @@ function planRouteFromCandidates(
 }
 
 const server = http.createServer(async (req, res) => {
+  const startedAt = Date.now();
+  const requestId = crypto.randomUUID().slice(0, 8);
+  const requestMeta = {
+    requestId,
+    method: req.method || '',
+    url: req.url || '',
+  };
+  log('info', 'request.start', requestMeta);
+
   try {
     if (!req.url || !req.method) {
       sendText(res, 400, 'Bad Request');
+      log('warn', 'request.invalid', requestMeta);
       return;
     }
 
@@ -495,8 +507,16 @@ const server = http.createServer(async (req, res) => {
       };
       if (body.lat === undefined || body.lon === undefined) {
         sendJson(res, 400, { error: 'lat/lon 为必填' });
+        log('warn', 'agent.plan.invalid_input', requestMeta);
         return;
       }
+      log('info', 'agent.plan.input', {
+        ...requestMeta,
+        city: body.city ?? '',
+        days: body.days ?? 2,
+        dailyHours: body.dailyHours ?? 6,
+        prefer: body.prefer ?? 'mixed',
+      });
       const result = await orchestrator.run({
         lat: Number(body.lat),
         lon: Number(body.lon),
@@ -514,6 +534,13 @@ const server = http.createServer(async (req, res) => {
         prefer: (body.prefer ?? 'mixed') as Prefer,
       });
       sendJson(res, 200, result);
+      log('info', 'agent.plan.output', {
+        ...requestMeta,
+        stops: result.route.stops.length,
+        hotels: result.hotels.length,
+        routeSource: result.route.source,
+        aiApplied: result.executionTrace.some((x) => x.includes('ai_decision_agent: applied')),
+      });
       return;
     }
 
@@ -549,9 +576,16 @@ const server = http.createServer(async (req, res) => {
     }
 
     sendText(res, 404, 'Not Found');
+    log('warn', 'request.not_found', { ...requestMeta, pathname });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    log('error', 'request.error', { ...requestMeta, error: msg });
     sendJson(res, 500, { error: msg });
+  } finally {
+    log('info', 'request.end', {
+      ...requestMeta,
+      durationMs: Date.now() - startedAt,
+    });
   }
 });
 

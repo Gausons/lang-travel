@@ -110,6 +110,7 @@ AMAP_JS_KEY=你的高德JSAPI Key(用于前端地图渲染)
 AMAP_SECURITY_JS_CODE=你的安全密钥(可选)
 OPENAI_API_KEY=你的OpenAI API Key(可选，用于AI全局优化决策)
 OPENAI_MODEL=gpt-4.1-mini(可选)
+LOG_LEVEL=info(debug/info/warn/error)
 ```
 
 打开：`http://localhost:3000`
