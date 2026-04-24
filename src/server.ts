@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 import { AmapClient } from './amap.js';
+import { planRouteWithAi } from './ai-route-planner.js';
 import { log } from './logger.js';
 import { MultiAgentOrchestrator } from './multi-agent.js';
 import { TravelPlannerAgent } from './planner.js';
@@ -182,6 +183,16 @@ function planRouteFromCandidates(
     stops: route,
     total_minutes: usedMin,
   };
+}
+
+function pickLocalRouteCandidates(agentRef: TravelPlannerAgent, city: string, prefer: Prefer): Place[] {
+  let candidates = agentRef.store.listPlaces(city);
+  if (prefer === 'park') {
+    candidates = candidates.filter((p) => p.category === 'park');
+  } else if (prefer === 'attraction') {
+    candidates = candidates.filter((p) => p.category === 'attraction');
+  }
+  return candidates;
 }
 
 const server = http.createServer(async (req, res) => {
@@ -412,6 +423,9 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       let result = agent.planRoute(lat, lon, city, hours, prefer);
+      let routeCandidates = pickLocalRouteCandidates(agent, city, prefer);
+      let planningSource: 'local' | 'amap' = 'local';
+      let aiApplied = false;
 
       if (amap.enabled) {
         try {
@@ -444,17 +458,33 @@ const server = http.createServer(async (req, res) => {
             }
           }
           if (byKey.size > 0) {
-            result = planRouteFromCandidates(lat, lon, hours, [...byKey.values()]);
+            routeCandidates = [...byKey.values()];
+            result = planRouteFromCandidates(lat, lon, hours, routeCandidates);
+            planningSource = 'amap';
           }
         } catch {
           // ignore and keep local fallback
         }
       }
 
+      const aiRoute = await planRouteWithAi({
+        startLat: lat,
+        startLon: lon,
+        city,
+        hours,
+        prefer,
+        candidates: routeCandidates,
+      });
+      if (aiRoute && aiRoute.stops.length > 0) {
+        result = aiRoute;
+        aiApplied = true;
+      }
+
       if (!amap.enabled || result.stops.length === 0) {
         sendJson(res, 200, {
           ...result,
-          source: 'local',
+          source: planningSource,
+          aiApplied,
           warning: amap.enabled ? undefined : '未配置 AMAP_KEY，当前使用本地估算时长。',
         });
         return;
@@ -487,6 +517,7 @@ const server = http.createServer(async (req, res) => {
         total_minutes: totalMinutes,
         summary: `${result.summary}（交通时长已按高德步行路线校准）`,
         source: 'amap',
+        aiApplied,
         routePolylines,
       });
       return;
