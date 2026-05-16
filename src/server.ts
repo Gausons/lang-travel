@@ -224,6 +224,16 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (pathname === '/api/mobile/config' && req.method === 'GET') {
+      sendJson(res, 200, {
+        apiVersion: 1,
+        amapEnabled: amap.enabled,
+        amapServiceConfigured: Boolean(AMAP_SERVICE_KEY),
+        aiPlanningEnabled: Boolean(process.env.OPENAI_API_KEY),
+      });
+      return;
+    }
+
     if (pathname === '/api/client-config') {
       sendJson(res, 200, {
         amapJsKey: AMAP_JS_KEY,

@@ -11,6 +11,7 @@
 - Node.js 18+
 - TypeScript
 - `tsx` 直接运行 TS
+- 移动端：Expo SDK 55 + React Native 0.83 + TypeScript（本机移动端调试建议 Node.js 20.19+）
 
 ## 项目结构
 
@@ -21,6 +22,8 @@
 - `src/cli.ts`: 命令行参数解析和命令分发
 - `src/agent.ts`: 入口文件（错误处理 + 启动 CLI）
 - `src/index.ts`: 复用导出（便于后续接 API）
+- `web/`: 现有 Web 可视化页面
+- `apps/mobile/`: Expo / React Native iOS + Android 客户端
 
 ## 安装依赖
 
@@ -149,3 +152,58 @@ curl "http://127.0.0.1:3000/api/parks?lat=31.2304&lon=121.4737&city=%E4%B8%8A%E6
 
 - 点位持久化在 `data/places.json`
 - 默认不再预置写死景点；页面会优先按当前位置从高德拉取实时点位
+
+## React Native 多端客户端
+
+移动端工程位于 `apps/mobile`，使用现有 Node Web 服务作为远端代理。服务端继续保存 `AMAP_KEY`、`OPENAI_API_KEY` 等敏感密钥；移动端只配置 API 地址和高德 iOS/Android 地图展示 Key。
+
+先启动代理服务：
+
+```bash
+export AMAP_KEY=你的高德Web服务Key
+export OPENAI_API_KEY=你的OpenAI API Key # 可选
+pnpm dev:web
+```
+
+移动端环境变量写入 `apps/mobile/.env.local`：
+
+```bash
+# iOS 模拟器访问本机服务
+EXPO_PUBLIC_API_BASE_URL=http://127.0.0.1:3000
+
+# Android 模拟器访问本机服务时改为：
+# EXPO_PUBLIC_API_BASE_URL=http://10.0.2.2:3000
+
+# 真机调试时改为 Mac 的局域网 IP，例如：
+# EXPO_PUBLIC_API_BASE_URL=http://192.168.1.20:3000
+
+# 高德移动端地图 Key，通过 Expo config plugin 写入原生配置
+AMAP_IOS_KEY=你的高德iOS移动端Key
+AMAP_ANDROID_KEY=你的高德Android移动端Key
+```
+
+本机运行：
+
+```bash
+pnpm mobile:start
+pnpm mobile:ios
+pnpm mobile:android
+```
+
+`pnpm mobile:ios` / `pnpm mobile:android` 会使用 Expo Prebuild 生成本地原生工程；`ios/` 和 `android/` 已按生成物处理并加入忽略列表。
+
+移动端首版支持：
+
+- 定位并用 `/api/regeo` 回填城市
+- 地图展示当前位置、点位、公园和路线折线
+- 查询 `/api/places`、`/api/parks`
+- 调用 `/api/route` 生成路线
+- 调用 `/api/agent/plan` 生成 Agent 自主规划和酒店比价
+
+移动端安全配置接口：
+
+```bash
+curl "http://127.0.0.1:3000/api/mobile/config"
+```
+
+该接口只返回 `apiVersion`、`amapEnabled`、`amapServiceConfigured`、`aiPlanningEnabled` 等非敏感开关，不返回高德 Web 服务 Key、OpenAI Key 或安全密钥。

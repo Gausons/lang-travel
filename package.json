@@ -7,6 +7,10 @@
     "dev": "tsx src/agent.ts",
     "dev:web": "tsx src/server.ts",
     "build": "tsc -p tsconfig.json",
+    "mobile:start": "pnpm --filter @lang-travel/mobile start",
+    "mobile:ios": "pnpm --filter @lang-travel/mobile ios",
+    "mobile:android": "pnpm --filter @lang-travel/mobile android",
+    "mobile:typecheck": "pnpm --filter @lang-travel/mobile typecheck",
     "start": "node dist/agent.js",
     "start:web": "node dist/server.js"
   },
