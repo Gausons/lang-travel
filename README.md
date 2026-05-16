@@ -108,9 +108,11 @@ pnpm dev:web
 或写入项目根目录 `.env`（服务会自动加载）：
 
 ```bash
-AMAP_KEY=你的高德Web服务Key(用于后端HTTP接口，如逆地理编码/路线/POI)
+MAP_PROVIDER=amap(可选：amap/google，默认amap)
+AMAP_KEY=你的高德Web服务Key(用于后端地图Provider，如逆地理编码/路线/POI)
 AMAP_JS_KEY=你的高德JSAPI Key(用于前端地图渲染)
 AMAP_SECURITY_JS_CODE=你的安全密钥(可选)
+GOOGLE_MAPS_API_KEY=你的Google Maps Platform API Key(MAP_PROVIDER=google时使用)
 OPENAI_API_KEY=你的OpenAI API Key(可选，用于AI全局优化决策)
 OPENAI_MODEL=gpt-4.1-mini(可选)
 LOG_LEVEL=info(debug/info/warn/error)
@@ -127,26 +129,39 @@ LOG_LEVEL=info(debug/info/warn/error)
 - 对话式调用 Agent
 - 查看当前城市已录入点位
 
-## 高德地图接入说明
+## 地图服务 Provider 接入说明
 
-- 需要高德开放平台 Web 服务 Key（环境变量：`AMAP_KEY`）
-- 地图展示需要 JS API Key（环境变量：`AMAP_JS_KEY`，未设置时回退用 `AMAP_KEY`）
+- 后端地图数据服务已抽象为可插拔 Provider（`src/map-provider.ts`）
+- 使用 `MAP_PROVIDER=amap` 时，需要高德开放平台 Web 服务 Key（环境变量：`AMAP_KEY`）
+- 使用 `MAP_PROVIDER=google` 时，需要 Google Maps Platform API Key（环境变量：`GOOGLE_MAPS_API_KEY`）
+- Web 地图展示当前仍使用高德 JS API，需要 JS API Key（环境变量：`AMAP_JS_KEY`，未设置时回退用 `AMAP_KEY`）
 - 如启用了高德安全密钥，可配置：`AMAP_SECURITY_JS_CODE`
 - 已接入能力：
-  - `/api/parks`：优先调用高德周边公园检索，失败自动回退本地数据
-- `/api/route`：对本地规划结果的交通段，按高德步行路线时长做校准
+  - `/api/parks`：优先调用当前地图 Provider 周边公园检索，失败自动回退本地数据
+- `/api/route`：对本地规划结果的交通段，按当前地图 Provider 步行路线时长做校准
 - `/api/agent/plan`：多 Agent 自主规划（多源酒店比价 + 最经济方案）
   - 若配置 `OPENAI_API_KEY`：由 AI 基于用户习惯/预算/候选信息做全局优化
   - 若 AI 调用失败：自动回退贪心结果（稳定兜底）
-  - `/api/health`：返回 `amapEnabled` 字段，方便检查是否生效
+  - `/api/health`：返回 `mapProvider`、`mapProviderEnabled` 字段，方便检查当前 Provider 是否生效
 
 示例：
 
 ```bash
+export MAP_PROVIDER=amap
 export AMAP_KEY=你的key
 curl "http://127.0.0.1:3000/api/health"
 curl "http://127.0.0.1:3000/api/parks?lat=31.2304&lon=121.4737&city=%E4%B8%8A%E6%B5%B7&radiusKm=5"
 ```
+
+切换 Google Maps：
+
+```bash
+export MAP_PROVIDER=google
+export GOOGLE_MAPS_API_KEY=你的Google Maps Platform API Key
+pnpm dev:web
+```
+
+新增 Provider 时，实现 `MapProvider` 接口并通过 `registerMapProvider(name, factory)` 或在 `src/map-providers.ts` 注册即可。业务层只依赖统一的 `searchNearbySpots`、`searchNearbyParks`、`searchNearbyHotels`、`walkingRoute`、`reverseGeocode` 能力。
 
 ## 数据文件
 

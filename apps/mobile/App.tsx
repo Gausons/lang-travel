@@ -18,6 +18,7 @@ import {
   API_BASE_URL,
   type AgentPlanResponse,
   type MobileConfigResponse,
+  type MapSource,
   type ParkResult,
   type Place,
   type Prefer,
@@ -124,7 +125,7 @@ export default function App() {
   const [activePanel, setActivePanel] = useState<Panel>('places');
   const [loading, setLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [source, setSource] = useState<'amap' | 'local'>('local');
+  const [source, setSource] = useState<MapSource>('local');
 
   const [parkRadius, setParkRadius] = useState('5');
   const [routeHours, setRouteHours] = useState('4');

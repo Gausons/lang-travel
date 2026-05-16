@@ -1,4 +1,4 @@
-import { AmapClient, type AmapHotelOption } from './amap.js';
+import type { MapHotelOption, MapProvider } from './map-provider.js';
 import { TravelPlannerAgent } from './planner.js';
 import type { Place, Prefer, RouteResult, RouteStop } from './types.js';
 
@@ -45,14 +45,14 @@ type HotelOption = {
 export type AgentPlanResult = {
   summary: string;
   assumptions: AgentPlanningInput;
-  route: RouteResult & { source: 'amap' | 'local'; routePolylines: Array<Array<[number, number]>> };
+  route: RouteResult & { source: string; routePolylines: Array<Array<[number, number]>> };
   hotels: HotelOption[];
   executionTrace: string[];
 };
 
 type HotelSource = {
   name: string;
-  fetchQuotes(input: AgentPlanningInput, seed: AmapHotelOption[]): Promise<HotelQuote[]>;
+  fetchQuotes(input: AgentPlanningInput, seed: MapHotelOption[]): Promise<HotelQuote[]>;
 };
 
 function clamp(num: number, min: number, max: number): number {
@@ -143,9 +143,10 @@ function planRouteFromCandidates(
   };
 }
 
-class AmapHotelSource implements HotelSource {
-  name = 'amap';
-  async fetchQuotes(_input: AgentPlanningInput, seed: AmapHotelOption[]): Promise<HotelQuote[]> {
+class MapProviderHotelSource implements HotelSource {
+  constructor(readonly name: string) {}
+
+  async fetchQuotes(_input: AgentPlanningInput, seed: MapHotelOption[]): Promise<HotelQuote[]> {
     return seed.map((h) => ({
       source: this.name,
       hotelKey: `${h.name}_${h.address}`,
@@ -170,7 +171,7 @@ function hashStr(s: string): number {
 
 class OtaBudgetSource implements HotelSource {
   name = 'ota_budget';
-  async fetchQuotes(_input: AgentPlanningInput, seed: AmapHotelOption[]): Promise<HotelQuote[]> {
+  async fetchQuotes(_input: AgentPlanningInput, seed: MapHotelOption[]): Promise<HotelQuote[]> {
     return seed.map((h) => {
       const base = h.priceCny ?? 500;
       const factor = 0.75 + (hashStr(h.id + this.name) % 26) / 100;
@@ -192,7 +193,7 @@ class OtaBudgetSource implements HotelSource {
 
 class OtaComfortSource implements HotelSource {
   name = 'ota_comfort';
-  async fetchQuotes(_input: AgentPlanningInput, seed: AmapHotelOption[]): Promise<HotelQuote[]> {
+  async fetchQuotes(_input: AgentPlanningInput, seed: MapHotelOption[]): Promise<HotelQuote[]> {
     return seed.map((h) => {
       const base = h.priceCny ?? 500;
       const factor = 0.95 + (hashStr(h.id + this.name) % 21) / 100;
@@ -217,11 +218,15 @@ export class MultiAgentOrchestrator {
 
   constructor(
     private readonly deps: {
-      amap: AmapClient;
+      mapProvider: MapProvider;
       planner: TravelPlannerAgent;
     },
   ) {
-    this.hotelSources = [new AmapHotelSource(), new OtaBudgetSource(), new OtaComfortSource()];
+    this.hotelSources = [
+      new MapProviderHotelSource(this.deps.mapProvider.name),
+      new OtaBudgetSource(),
+      new OtaComfortSource(),
+    ];
   }
 
   async run(input: AgentPlanningInput): Promise<AgentPlanResult> {
@@ -230,13 +235,15 @@ export class MultiAgentOrchestrator {
 
     trace.push('spot_research_agent: collecting nearby POIs');
     let route = this.deps.planner.planRoute(input.lat, input.lon, input.city, totalHours, input.prefer);
-    let routeSource: 'amap' | 'local' = 'local';
+    let routeSource = 'local';
 
-    if (this.deps.amap.enabled) {
+    if (this.deps.mapProvider.enabled) {
       try {
         const keywords = inferKeywordsByInterests(input.interests);
         const groups = await Promise.all(
-          keywords.map((kw) => this.deps.amap.searchNearbySpots(input.lat, input.lon, 15, input.city, kw)),
+          keywords.map((kw) =>
+            this.deps.mapProvider.searchNearbySpots(input.lat, input.lon, 15, input.city, kw),
+          ),
         );
         const spots = groups.flat();
         const byKey = new Map<string, Place>();
@@ -253,7 +260,7 @@ export class MultiAgentOrchestrator {
               lat: s.lat,
               lon: s.lon,
               city: input.city || '未知',
-              tags: ['高德', ...keywords],
+              tags: [this.deps.mapProvider.displayName, ...keywords],
               avg_visit_min: s.category === 'park' ? 70 : 95,
               score: 4.6,
               created_at: new Date().toISOString(),
@@ -262,7 +269,7 @@ export class MultiAgentOrchestrator {
         }
         if (byKey.size > 0) {
           route = planRouteFromCandidates(input.lat, input.lon, totalHours, [...byKey.values()]);
-          routeSource = 'amap';
+          routeSource = this.deps.mapProvider.name;
         }
       } catch {
         trace.push('spot_research_agent: fallback to local candidates');
@@ -272,13 +279,13 @@ export class MultiAgentOrchestrator {
     trace.push('route_planner_agent: calibrating legs with real walking route');
     const routePolylines: Array<Array<[number, number]>> = [];
     let totalMinutes = route.total_minutes;
-    if (this.deps.amap.enabled && route.stops.length > 0) {
+    if (this.deps.mapProvider.enabled && route.stops.length > 0) {
       let currentLat = input.lat;
       let currentLon = input.lon;
       totalMinutes = 0;
       for (const stop of route.stops) {
         try {
-          const leg = await this.deps.amap.walkingRoute(currentLat, currentLon, stop.lat, stop.lon);
+          const leg = await this.deps.mapProvider.walkingRoute(currentLat, currentLon, stop.lat, stop.lon);
           if (leg) {
             stop.travel_mode = 'walk';
             stop.travel_min = Math.max(1, Math.round(leg.durationSec / 60));
@@ -295,10 +302,10 @@ export class MultiAgentOrchestrator {
     }
 
     trace.push('hotel_research_agents: collecting hotel offers from multiple sources');
-    let seedHotels: AmapHotelOption[] = [];
-    if (this.deps.amap.enabled) {
+    let seedHotels: MapHotelOption[] = [];
+    if (this.deps.mapProvider.enabled) {
       try {
-        seedHotels = await this.deps.amap.searchNearbyHotels(input.lat, input.lon, 8, input.city);
+        seedHotels = await this.deps.mapProvider.searchNearbyHotels(input.lat, input.lon, 8, input.city);
       } catch {
         seedHotels = [];
       }

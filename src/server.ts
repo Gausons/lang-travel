@@ -4,9 +4,10 @@ import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
-import { AmapClient } from './amap.js';
 import { planRouteWithAi } from './ai-route-planner.js';
 import { log } from './logger.js';
+import { isFilledSecret } from './map-provider.js';
+import { createMapProvider, listMapProviderNames } from './map-providers.js';
 import { MultiAgentOrchestrator } from './multi-agent.js';
 import { TravelPlannerAgent } from './planner.js';
 import type { Category, Place, Prefer, RouteResult, RouteStop } from './types.js';
@@ -48,13 +49,19 @@ function loadDotEnv(): void {
 
 loadDotEnv();
 
-const AMAP_JS_KEY = process.env.AMAP_JS_KEY ?? process.env.AMAP_KEY ?? '';
-const AMAP_SECURITY_JS_CODE = process.env.AMAP_SECURITY_JS_CODE ?? '';
-const AMAP_SERVICE_KEY = process.env.AMAP_KEY ?? '';
+const AMAP_JS_KEY = isFilledSecret(process.env.AMAP_JS_KEY)
+  ? process.env.AMAP_JS_KEY
+  : isFilledSecret(process.env.AMAP_KEY)
+    ? process.env.AMAP_KEY
+    : '';
+const AMAP_SECURITY_JS_CODE = isFilledSecret(process.env.AMAP_SECURITY_JS_CODE)
+  ? process.env.AMAP_SECURITY_JS_CODE
+  : '';
+const AMAP_SERVICE_KEY = isFilledSecret(process.env.AMAP_KEY) ? process.env.AMAP_KEY : '';
 
 const agent = new TravelPlannerAgent();
-const amap = new AmapClient(AMAP_SERVICE_KEY);
-const orchestrator = new MultiAgentOrchestrator({ amap, planner: agent });
+const mapProvider = createMapProvider();
+const orchestrator = new MultiAgentOrchestrator({ mapProvider, planner: agent });
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -219,7 +226,9 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 200, {
         ok: true,
         now: new Date().toISOString(),
-        amapEnabled: amap.enabled,
+        mapProvider: mapProvider.name,
+        mapProviderEnabled: mapProvider.enabled,
+        amapEnabled: mapProvider.name === 'amap' && mapProvider.enabled,
       });
       return;
     }
@@ -227,8 +236,12 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/mobile/config' && req.method === 'GET') {
       sendJson(res, 200, {
         apiVersion: 1,
-        amapEnabled: amap.enabled,
-        amapServiceConfigured: Boolean(AMAP_SERVICE_KEY),
+        mapProvider: mapProvider.name,
+        mapProviderDisplayName: mapProvider.displayName,
+        mapProviderEnabled: mapProvider.enabled,
+        availableMapProviders: listMapProviderNames(),
+        amapEnabled: mapProvider.name === 'amap' && mapProvider.enabled,
+        amapServiceConfigured: mapProvider.name === 'amap' && mapProvider.enabled,
         aiPlanningEnabled: Boolean(process.env.OPENAI_API_KEY),
       });
       return;
@@ -238,7 +251,7 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 200, {
         amapJsKey: AMAP_JS_KEY,
         amapSecurityJsCode: AMAP_SECURITY_JS_CODE,
-        amapEnabled: amap.enabled,
+        amapEnabled: Boolean(AMAP_JS_KEY),
         amapServiceConfigured: Boolean(AMAP_SERVICE_KEY),
       });
       return;
@@ -247,21 +260,21 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/regeo' && req.method === 'GET') {
       const lat = toNum(searchParams.get('lat'), 'lat');
       const lon = toNum(searchParams.get('lon'), 'lon');
-      if (!amap.enabled) {
+      if (!mapProvider.enabled) {
         sendJson(res, 200, {
           city: '',
           source: 'local',
-          warning: '未配置 AMAP_KEY，无法逆地理编码。',
+          warning: `未配置 ${mapProvider.displayName} 地图服务，无法逆地理编码。`,
         });
         return;
       }
       try {
-        const info = await amap.reverseGeocode(lat, lon);
+        const info = await mapProvider.reverseGeocode(lat, lon);
         sendJson(res, 200, {
           city: info?.city ?? '',
           province: info?.province ?? '',
           district: info?.district ?? '',
-          source: 'amap',
+          source: mapProvider.name,
         });
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -281,12 +294,12 @@ const server = http.createServer(async (req, res) => {
       const radiusKm = searchParams.get('radiusKm') ? toNum(searchParams.get('radiusKm'), 'radiusKm') : 8;
       const localPlaces = agent.store.listPlaces(city);
 
-      if (amap.enabled && latRaw && lonRaw) {
+      if (mapProvider.enabled && latRaw && lonRaw) {
         const lat = toNum(latRaw, 'lat');
         const lon = toNum(lonRaw, 'lon');
         try {
-          const scenic = await amap.searchNearbySpots(lat, lon, radiusKm, city, '景点');
-          const parks = await amap.searchNearbySpots(lat, lon, radiusKm, city, '公园');
+          const scenic = await mapProvider.searchNearbySpots(lat, lon, radiusKm, city, '景点');
+          const parks = await mapProvider.searchNearbySpots(lat, lon, radiusKm, city, '公园');
           const remote = [...scenic, ...parks].map((p) => ({
             id: p.id,
             name: p.name,
@@ -294,7 +307,7 @@ const server = http.createServer(async (req, res) => {
             lat: p.lat,
             lon: p.lon,
             city: city ?? '',
-            tags: ['高德', '实时'],
+            tags: [mapProvider.displayName, '实时'],
             avg_visit_min: p.category === 'park' ? 60 : 90,
             score: 4.6,
             created_at: new Date().toISOString(),
@@ -306,7 +319,7 @@ const server = http.createServer(async (req, res) => {
           }
           sendJson(res, 200, {
             places: [...byKey.values()],
-            source: 'amap',
+            source: mapProvider.name,
           });
           return;
         } catch (e) {
@@ -314,7 +327,7 @@ const server = http.createServer(async (req, res) => {
           sendJson(res, 200, {
             places: localPlaces,
             source: 'local',
-            warning: `高德点位拉取失败，已回退本地数据: ${msg}`,
+            warning: `${mapProvider.displayName} 点位拉取失败，已回退本地数据: ${msg}`,
           });
           return;
         }
@@ -345,9 +358,9 @@ const server = http.createServer(async (req, res) => {
       }
 
       let city = (body.city ?? '').trim();
-      if (!city && amap.enabled) {
+      if (!city && mapProvider.enabled) {
         try {
-          const info = await amap.reverseGeocode(Number(body.lat), Number(body.lon));
+          const info = await mapProvider.reverseGeocode(Number(body.lat), Number(body.lon));
           city = info?.city || info?.district || info?.province || '';
         } catch {
           // ignore
@@ -378,17 +391,17 @@ const server = http.createServer(async (req, res) => {
       const radiusKm = searchParams.get('radiusKm') ? toNum(searchParams.get('radiusKm'), 'radiusKm') : 3;
       const localParks = agent.findNearbyParks(lat, lon, radiusKm, 10);
 
-      if (!amap.enabled) {
+      if (!mapProvider.enabled) {
         sendJson(res, 200, {
           parks: localParks,
           source: 'local',
-          warning: '未配置 AMAP_KEY，当前使用本地点位数据。',
+          warning: `未配置 ${mapProvider.displayName} 地图服务，当前使用本地点位数据。`,
         });
         return;
       }
 
       try {
-        const parks = await amap.searchNearbyParks(lat, lon, radiusKm, city);
+        const parks = await mapProvider.searchNearbyParks(lat, lon, radiusKm, city);
         sendJson(res, 200, {
           parks: parks.map((p) => ({
             place: {
@@ -398,24 +411,24 @@ const server = http.createServer(async (req, res) => {
               lat: p.lat,
               lon: p.lon,
               city: city ?? '',
-              tags: ['高德', '实时'],
+              tags: [mapProvider.displayName, '实时'],
               avg_visit_min: 60,
               score: 4.6,
               created_at: new Date().toISOString(),
             },
             distanceKm: p.distanceKm,
-            source: 'amap',
+            source: mapProvider.name,
             address: p.address,
             poiType: p.type,
           })),
-          source: 'amap',
+          source: mapProvider.name,
         });
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         sendJson(res, 200, {
           parks: localParks,
           source: 'local',
-          warning: `高德接口调用失败，已回退本地点位：${msg}`,
+          warning: `${mapProvider.displayName} 接口调用失败，已回退本地点位：${msg}`,
         });
       }
       return;
@@ -434,19 +447,19 @@ const server = http.createServer(async (req, res) => {
       }
       let result = agent.planRoute(lat, lon, city, hours, prefer);
       let routeCandidates = pickLocalRouteCandidates(agent, city, prefer);
-      let planningSource: 'local' | 'amap' = 'local';
+      let planningSource = 'local';
       let aiApplied = false;
 
-      if (amap.enabled) {
+      if (mapProvider.enabled) {
         try {
           const spots =
             prefer === 'park'
-              ? await amap.searchNearbySpots(lat, lon, 12, city, '公园')
+              ? await mapProvider.searchNearbySpots(lat, lon, 12, city, '公园')
               : prefer === 'attraction'
-                ? await amap.searchNearbySpots(lat, lon, 12, city, '景点')
+                ? await mapProvider.searchNearbySpots(lat, lon, 12, city, '景点')
                 : [
-                    ...(await amap.searchNearbySpots(lat, lon, 12, city, '景点')),
-                    ...(await amap.searchNearbySpots(lat, lon, 12, city, '公园')),
+                    ...(await mapProvider.searchNearbySpots(lat, lon, 12, city, '景点')),
+                    ...(await mapProvider.searchNearbySpots(lat, lon, 12, city, '公园')),
                   ];
 
           const byKey = new Map<string, Place>();
@@ -460,7 +473,7 @@ const server = http.createServer(async (req, res) => {
                 lat: s.lat,
                 lon: s.lon,
                 city,
-                tags: ['高德', '实时'],
+                tags: [mapProvider.displayName, '实时'],
                 avg_visit_min: s.category === 'park' ? 60 : 90,
                 score: 4.6,
                 created_at: new Date().toISOString(),
@@ -470,7 +483,7 @@ const server = http.createServer(async (req, res) => {
           if (byKey.size > 0) {
             routeCandidates = [...byKey.values()];
             result = planRouteFromCandidates(lat, lon, hours, routeCandidates);
-            planningSource = 'amap';
+            planningSource = mapProvider.name;
           }
         } catch {
           // ignore and keep local fallback
@@ -490,12 +503,14 @@ const server = http.createServer(async (req, res) => {
         aiApplied = true;
       }
 
-      if (!amap.enabled || result.stops.length === 0) {
+      if (!mapProvider.enabled || result.stops.length === 0) {
         sendJson(res, 200, {
           ...result,
           source: planningSource,
           aiApplied,
-          warning: amap.enabled ? undefined : '未配置 AMAP_KEY，当前使用本地估算时长。',
+          warning: mapProvider.enabled
+            ? undefined
+            : `未配置 ${mapProvider.displayName} 地图服务，当前使用本地估算时长。`,
         });
         return;
       }
@@ -507,7 +522,7 @@ const server = http.createServer(async (req, res) => {
 
       for (const stop of result.stops) {
         try {
-          const leg = await amap.walkingRoute(currentLat, currentLon, stop.lat, stop.lon);
+          const leg = await mapProvider.walkingRoute(currentLat, currentLon, stop.lat, stop.lon);
           if (leg) {
             stop.travel_mode = 'walk';
             stop.travel_min = Math.max(1, Math.round(leg.durationSec / 60));
@@ -525,8 +540,8 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 200, {
         ...result,
         total_minutes: totalMinutes,
-        summary: `${result.summary}（交通时长已按高德步行路线校准）`,
-        source: 'amap',
+        summary: `${result.summary}（交通时长已按${mapProvider.displayName}步行路线校准）`,
+        source: mapProvider.name,
         aiApplied,
         routePolylines,
       });

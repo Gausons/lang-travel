@@ -2,6 +2,7 @@ import { Platform } from 'react-native';
 
 export type Category = 'park' | 'attraction';
 export type Prefer = 'mixed' | 'park' | 'attraction';
+export type MapSource = 'local' | string;
 
 export type TravelContext = {
   lat: number;
@@ -82,7 +83,7 @@ export type AgentPlanResponse = {
     prefer: Prefer;
   };
   route: RouteResponse & {
-    source: 'amap' | 'local';
+    source: MapSource;
     routePolylines: Array<Array<[number, number]>>;
   };
   hotels: HotelOption[];
@@ -91,6 +92,10 @@ export type AgentPlanResponse = {
 
 export type MobileConfigResponse = {
   apiVersion: number;
+  mapProvider?: string;
+  mapProviderDisplayName?: string;
+  mapProviderEnabled?: boolean;
+  availableMapProviders?: string[];
   amapEnabled: boolean;
   amapServiceConfigured: boolean;
   aiPlanningEnabled: boolean;
@@ -98,13 +103,13 @@ export type MobileConfigResponse = {
 
 export type PlacesResponse = {
   places: Place[];
-  source: 'amap' | 'local';
+  source: MapSource;
   warning?: string;
 };
 
 export type ParksResponse = {
   parks: ParkResult[];
-  source: 'amap' | 'local';
+  source: MapSource;
   warning?: string;
 };
 
@@ -112,7 +117,7 @@ export type RegeoResponse = {
   city?: string;
   province?: string;
   district?: string;
-  source: 'amap' | 'local';
+  source: MapSource;
   warning?: string;
 };
 

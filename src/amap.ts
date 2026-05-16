@@ -1,3 +1,13 @@
+import { isFilledSecret } from './map-provider.js';
+import type {
+  MapCityResult,
+  MapHotelOption,
+  MapNearbyPark,
+  MapNearbySpot,
+  MapProvider,
+  MapWalkingLeg,
+} from './map-provider.js';
+
 type AmapPoi = {
   id?: string;
   name?: string;
@@ -42,50 +52,11 @@ type AmapRegeoResp = {
   };
 };
 
-export type AmapNearbyPark = {
-  id: string;
-  name: string;
-  lat: number;
-  lon: number;
-  distanceKm: number;
-  address: string;
-  type: string;
-};
-
-export type AmapNearbySpot = {
-  id: string;
-  name: string;
-  lat: number;
-  lon: number;
-  distanceKm: number;
-  address: string;
-  type: string;
-  category: 'park' | 'attraction';
-};
-
-export type AmapWalkingLeg = {
-  distanceM: number;
-  durationSec: number;
-  steps: string[];
-  polylines: Array<Array<[number, number]>>;
-};
-
-export type AmapCityResult = {
-  city: string;
-  province: string;
-  district: string;
-};
-
-export type AmapHotelOption = {
-  id: string;
-  name: string;
-  lat: number;
-  lon: number;
-  distanceKm: number;
-  address: string;
-  priceCny: number | null;
-  rating: number | null;
-};
+export type AmapNearbyPark = MapNearbyPark;
+export type AmapNearbySpot = MapNearbySpot;
+export type AmapWalkingLeg = MapWalkingLeg;
+export type AmapCityResult = MapCityResult;
+export type AmapHotelOption = MapHotelOption;
 
 function splitLocation(location: string): { lon: number; lat: number } | null {
   const [lonRaw, latRaw] = location.split(',');
@@ -115,12 +86,14 @@ function parsePolyline(polyline?: string): Array<[number, number]> {
     .filter((x): x is [number, number] => Boolean(x));
 }
 
-export class AmapClient {
+export class AmapClient implements MapProvider {
+  readonly name = 'amap';
+  readonly displayName = '高德';
   private readonly key?: string;
   private readonly base = 'https://restapi.amap.com';
 
   constructor(key = process.env.AMAP_KEY) {
-    this.key = key;
+    this.key = isFilledSecret(key) ? key : undefined;
   }
 
   get enabled(): boolean {
@@ -144,7 +117,7 @@ export class AmapClient {
     return (await resp.json()) as T;
   }
 
-  async searchNearbyParks(lat: number, lon: number, radiusKm = 3, city?: string): Promise<AmapNearbyPark[]> {
+  async searchNearbyParks(lat: number, lon: number, radiusKm = 3, city?: string): Promise<MapNearbyPark[]> {
     const spots = await this.searchNearbySpots(lat, lon, radiusKm, city, '公园');
     return spots.map((s) => ({
       id: s.id,
@@ -163,7 +136,7 @@ export class AmapClient {
     radiusKm = 3,
     city?: string,
     keywords = '景点',
-  ): Promise<AmapNearbySpot[]> {
+  ): Promise<MapNearbySpot[]> {
     const radiusMeter = String(Math.min(50000, Math.max(500, Math.round(radiusKm * 1000))));
     const data = await this.getJson<AmapPlaceAroundResp>('/v3/place/around', {
       location: `${lon},${lat}`,
@@ -181,7 +154,7 @@ export class AmapClient {
       throw new Error(`高德 POI 检索失败: ${data.info ?? 'unknown'}`);
     }
 
-    const spots: AmapNearbySpot[] = [];
+    const spots: MapNearbySpot[] = [];
     for (const poi of data.pois ?? []) {
       if (!poi.name || !poi.location) {
         continue;
@@ -212,7 +185,7 @@ export class AmapClient {
     lon: number,
     radiusKm = 5,
     city?: string,
-  ): Promise<AmapHotelOption[]> {
+  ): Promise<MapHotelOption[]> {
     const radiusMeter = String(Math.min(50000, Math.max(1000, Math.round(radiusKm * 1000))));
     const data = await this.getJson<AmapPlaceAroundResp>('/v3/place/around', {
       location: `${lon},${lat}`,
@@ -231,7 +204,7 @@ export class AmapClient {
       throw new Error(`高德酒店检索失败: ${data.info ?? 'unknown'}`);
     }
 
-    const hotels: AmapHotelOption[] = [];
+    const hotels: MapHotelOption[] = [];
     for (const poi of data.pois ?? []) {
       if (!poi.name || !poi.location) {
         continue;
