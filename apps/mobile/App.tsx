@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   Pressable,
+  Platform,
   SafeAreaView,
   ScrollView,
   StatusBar,
@@ -12,7 +13,7 @@ import {
   View,
 } from 'react-native';
 import * as Location from 'expo-location';
-import { ExpoGaodeMapModule, MapView, Marker, Polyline } from 'expo-gaode-map';
+import { ExpoGaodeMapModule, MapView, Marker, Polyline, type MapViewRef } from 'expo-gaode-map';
 
 import {
   API_BASE_URL,
@@ -45,11 +46,20 @@ type LatLng = {
   longitude: number;
 };
 
+type LocatedContext = TravelContext & {
+  provider: 'gaode' | 'expo';
+};
+
 const DEFAULT_CONTEXT: TravelContext = {
   lat: 31.2304,
   lon: 121.4737,
   city: '',
 };
+
+const NATIVE_MAP_ENABLED = process.env.EXPO_PUBLIC_ENABLE_NATIVE_MAP === 'true';
+const NATIVE_MAP_IOS_KEY = process.env.EXPO_PUBLIC_AMAP_IOS_KEY?.trim() ?? '';
+const CAN_RENDER_NATIVE_MAP =
+  NATIVE_MAP_ENABLED && (Platform.OS !== 'ios' || NATIVE_MAP_IOS_KEY.length > 0);
 
 const tabs: Array<{ id: Panel; label: string }> = [
   { id: 'places', label: '点位' },
@@ -83,6 +93,22 @@ function positionOf(lat: number, lon: number): LatLng {
   return { latitude: lat, longitude: lon };
 }
 
+function getTextField(value: unknown, key: string): string {
+  if (!value || typeof value !== 'object' || !(key in value)) {
+    return '';
+  }
+  const field = (value as Record<string, unknown>)[key];
+  return typeof field === 'string' ? field : '';
+}
+
+function getNumberField(value: unknown, key: string): number | null {
+  if (!value || typeof value !== 'object' || !(key in value)) {
+    return null;
+  }
+  const field = (value as Record<string, unknown>)[key];
+  return typeof field === 'number' && Number.isFinite(field) ? field : null;
+}
+
 function routeSegments(ctx: TravelContext, route: RouteResponse | null): LatLng[][] {
   if (!route || route.stops.length === 0) {
     return [];
@@ -99,7 +125,7 @@ function routeSegments(ctx: TravelContext, route: RouteResponse | null): LatLng[
   return [[positionOf(ctx.lat, ctx.lon), ...route.stops.map((stop) => positionOf(stop.lat, stop.lon))]];
 }
 
-function initializeGaodePrivacy(): void {
+function initializeGaodeSdk(): boolean {
   try {
     const status = ExpoGaodeMapModule.getPrivacyStatus?.();
     if (!status?.isReady) {
@@ -110,12 +136,21 @@ function initializeGaodePrivacy(): void {
         privacyVersion: '2026-05-16',
       });
     }
+    if (Platform.OS === 'ios' && NATIVE_MAP_ENABLED) {
+      if (!NATIVE_MAP_IOS_KEY) {
+        return false;
+      }
+      ExpoGaodeMapModule.initSDK?.({ iosKey: NATIVE_MAP_IOS_KEY });
+    }
+    return true;
   } catch {
     // The native module may not be available until a prebuild/dev-client runtime is used.
+    return false;
   }
 }
 
 export default function App() {
+  const mapViewRef = useRef<MapViewRef | null>(null);
   const [contextForm, setContextForm] = useState<ContextForm>(toContextForm(DEFAULT_CONTEXT));
   const [config, setConfig] = useState<MobileConfigResponse | null>(null);
   const [places, setPlaces] = useState<Place[]>([]);
@@ -126,6 +161,10 @@ export default function App() {
   const [loading, setLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [source, setSource] = useState<MapSource>('local');
+  const [mapReady, setMapReady] = useState(false);
+  const [nativeMapReady, setNativeMapReady] = useState(false);
+  const [mapLoaded, setMapLoaded] = useState(false);
+  const [locationStatus, setLocationStatus] = useState('未定位');
 
   const [parkRadius, setParkRadius] = useState('5');
   const [routeHours, setRouteHours] = useState('4');
@@ -151,7 +190,8 @@ export default function App() {
   const polylines = useMemo(() => routeSegments(context, route), [context, route]);
 
   useEffect(() => {
-    initializeGaodePrivacy();
+    setNativeMapReady(initializeGaodeSdk());
+    setMapReady(true);
     void runTask('启动中', async () => {
       const [mobileConfig, placeResp] = await Promise.all([
         fetchMobileConfig(),
@@ -162,6 +202,15 @@ export default function App() {
       setSource(placeResp.source);
     });
   }, []);
+
+  useEffect(() => {
+    if (!mapLoaded || !nativeMapReady || !CAN_RENDER_NATIVE_MAP) {
+      return;
+    }
+    void mapViewRef.current
+      ?.moveCamera({ target: mapCenter, zoom: 13 }, 350)
+      .catch(() => undefined);
+  }, [mapCenter, mapLoaded, nativeMapReady]);
 
   function readContext(): TravelContext {
     const lat = Number(contextForm.lat);
@@ -194,23 +243,85 @@ export default function App() {
     const resp = await fetchPlaces(nextContext);
     setPlaces(resp.places);
     setSource(resp.source);
+    if (resp.warning) {
+      setError(resp.warning);
+    }
+  }
+
+  async function locateWithGaode(): Promise<LocatedContext | null> {
+    if (!nativeMapReady || !CAN_RENDER_NATIVE_MAP) {
+      return null;
+    }
+    try {
+      const permission = await ExpoGaodeMapModule.requestLocationPermission?.();
+      if (permission && typeof permission === 'object' && 'granted' in permission && !permission.granted) {
+        return null;
+      }
+      ExpoGaodeMapModule.setLocatingWithReGeocode?.(true);
+      const current = await ExpoGaodeMapModule.getCurrentLocation?.();
+      const latitude = getNumberField(current, 'latitude');
+      const longitude = getNumberField(current, 'longitude');
+      if (latitude === null || longitude === null) {
+        return null;
+      }
+      const city = normalizeCityName(
+        getTextField(current, 'city') ||
+          getTextField(current, 'district') ||
+          getTextField(current, 'province'),
+      );
+      return {
+        lat: Number(latitude.toFixed(6)),
+        lon: Number(longitude.toFixed(6)),
+        city,
+        provider: 'gaode',
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  async function locateWithExpo(): Promise<LocatedContext> {
+    const permission = await Location.requestForegroundPermissionsAsync();
+    if (!permission.granted) {
+      throw new Error('定位权限未开启');
+    }
+    const current = await Location.getCurrentPositionAsync({
+      accuracy: Location.Accuracy.Balanced,
+    });
+    const lat = Number(current.coords.latitude.toFixed(6));
+    const lon = Number(current.coords.longitude.toFixed(6));
+    const regeo = await reverseGeocode({ lat, lon }).catch(() => null);
+    const city = normalizeCityName(regeo?.city || regeo?.district || regeo?.province);
+    return { lat, lon, city, provider: 'expo' };
+  }
+
+  async function locateContext(): Promise<LocatedContext> {
+    const gaodeLocation = await locateWithGaode();
+    return gaodeLocation ?? locateWithExpo();
   }
 
   async function locateCurrent(): Promise<void> {
     await runTask('定位中', async () => {
-      const permission = await Location.requestForegroundPermissionsAsync();
-      if (!permission.granted) {
-        throw new Error('定位权限未开启');
-      }
-      const current = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Balanced,
-      });
-      const lat = Number(current.coords.latitude.toFixed(6));
-      const lon = Number(current.coords.longitude.toFixed(6));
-      const regeo = await reverseGeocode({ lat, lon }).catch(() => null);
-      const city = normalizeCityName(regeo?.city || regeo?.district || regeo?.province);
-      const nextContext = { lat, lon, city };
+      const nextContext = await locateContext();
       setContextForm(toContextForm(nextContext));
+      setLocationStatus(
+        `${nextContext.provider === 'gaode' ? '高德' : '系统'}定位 ${nextContext.lat.toFixed(6)}, ${nextContext.lon.toFixed(6)}${
+          nextContext.city ? ` · ${nextContext.city}` : ''
+        }`,
+      );
+      await refreshPlaces(nextContext);
+    });
+  }
+
+  async function locateAndRefreshPlaces(): Promise<void> {
+    await runTask('定位并刷新', async () => {
+      const nextContext = await locateContext();
+      setContextForm(toContextForm(nextContext));
+      setLocationStatus(
+        `${nextContext.provider === 'gaode' ? '高德' : '系统'}定位 ${nextContext.lat.toFixed(6)}, ${nextContext.lon.toFixed(6)}${
+          nextContext.city ? ` · ${nextContext.city}` : ''
+        }`,
+      );
       await refreshPlaces(nextContext);
     });
   }
@@ -257,50 +368,69 @@ export default function App() {
     <SafeAreaView style={styles.screen}>
       <StatusBar barStyle="dark-content" />
       <View style={styles.mapArea}>
-        <MapView
-          key={`${mapCenter.latitude},${mapCenter.longitude}`}
-          style={styles.map}
-          initialCameraPosition={{ target: mapCenter, zoom: 13 }}
-          myLocationEnabled
-        >
-          <Marker position={mapCenter} title="当前位置" pinColor="red" />
-          {places.slice(0, 40).map((place) => (
-            <Marker
-              key={`place-${place.id}`}
-              position={positionOf(place.lat, place.lon)}
-              title={place.name}
-              snippet={place.category}
-              pinColor={place.category === 'park' ? 'green' : 'orange'}
-            />
-          ))}
-          {parks.map((item) => (
-            <Marker
-              key={`park-${item.place.id}`}
-              position={positionOf(item.place.lat, item.place.lon)}
-              title={item.place.name}
-              snippet={`${item.distanceKm.toFixed(2)}km`}
-              pinColor="cyan"
-            />
-          ))}
-          {route?.stops.map((stop, index) => (
-            <Marker
-              key={`route-${stop.name}-${index}`}
-              position={positionOf(stop.lat, stop.lon)}
-              title={`${index + 1}. ${stop.name}`}
-              snippet={`${stop.travel_min}分钟路程`}
-              pinColor="blue"
-            />
-          ))}
-          {polylines.map((points, index) => (
-            <Polyline
-              key={`line-${index}`}
-              points={points}
-              strokeColor="#1677FF"
-              strokeWidth={6}
-              simplificationTolerance={2}
-            />
-          ))}
-        </MapView>
+        {mapReady && nativeMapReady && CAN_RENDER_NATIVE_MAP ? (
+          <MapView
+            ref={mapViewRef}
+            style={styles.map}
+            initialCameraPosition={{ target: mapCenter, zoom: 13 }}
+            myLocationEnabled
+            onLoad={() => setMapLoaded(true)}
+          >
+            <Marker position={mapCenter} title="当前位置" pinColor="red" />
+            {places.slice(0, 40).map((place) => (
+              <Marker
+                key={`place-${place.id}`}
+                position={positionOf(place.lat, place.lon)}
+                title={place.name}
+                snippet={place.category}
+                pinColor={place.category === 'park' ? 'green' : 'orange'}
+              />
+            ))}
+            {parks.map((item) => (
+              <Marker
+                key={`park-${item.place.id}`}
+                position={positionOf(item.place.lat, item.place.lon)}
+                title={item.place.name}
+                snippet={`${item.distanceKm.toFixed(2)}km`}
+                pinColor="cyan"
+              />
+            ))}
+            {route?.stops.map((stop, index) => (
+              <Marker
+                key={`route-${stop.name}-${index}`}
+                position={positionOf(stop.lat, stop.lon)}
+                title={`${index + 1}. ${stop.name}`}
+                snippet={`${stop.travel_min}分钟路程`}
+                pinColor="blue"
+              />
+            ))}
+            {polylines.map((points, index) => (
+              <Polyline
+                key={`line-${index}`}
+                points={points}
+                strokeColor="#1677FF"
+                strokeWidth={6}
+                simplificationTolerance={2}
+              />
+            ))}
+          </MapView>
+        ) : (
+          <View style={[styles.map, styles.mapPlaceholder]}>
+            {!mapReady ? <ActivityIndicator color="#0F6EFF" /> : null}
+            <Text style={styles.mapPlaceholderText}>
+              {mapReady
+                ? NATIVE_MAP_ENABLED && !nativeMapReady
+                  ? '地图初始化失败'
+                  : `${Platform.OS === 'ios' ? 'iOS' : 'Android'} 原生地图未启用`
+                : '正在初始化地图'}
+            </Text>
+            {mapReady ? (
+              <Text style={styles.mapPlaceholderHint}>
+                配置有效的高德移动端 Key 后，将 EXPO_PUBLIC_ENABLE_NATIVE_MAP 设为 true 再重启预览。
+              </Text>
+            ) : null}
+          </View>
+        )}
         <View style={styles.statusBar}>
           <Text style={styles.statusText}>API {API_BASE_URL}</Text>
           <Text style={styles.statusPill}>数据 {source}</Text>
@@ -349,11 +479,12 @@ export default function App() {
             <View style={styles.actionRow}>
               <ActionButton label="定位" onPress={locateCurrent} tone="secondary" />
               <ActionButton
-                label="刷新点位"
-                onPress={() => runTask('刷新点位', () => refreshPlaces())}
+                label="定位刷新"
+                onPress={locateAndRefreshPlaces}
                 tone="primary"
               />
             </View>
+            <Text style={styles.locationStatus}>{locationStatus}</Text>
           </View>
 
           <View style={styles.tabs}>
@@ -667,6 +798,23 @@ const styles = StyleSheet.create({
   map: {
     flex: 1,
   },
+  mapPlaceholder: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  mapPlaceholderText: {
+    color: '#2A3C55',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  mapPlaceholderHint: {
+    maxWidth: 280,
+    color: '#667891',
+    fontSize: 12,
+    lineHeight: 18,
+    textAlign: 'center',
+  },
   statusBar: {
     position: 'absolute',
     top: 12,
@@ -768,6 +916,11 @@ const styles = StyleSheet.create({
   actionRow: {
     flexDirection: 'row',
     gap: 10,
+  },
+  locationStatus: {
+    color: '#607089',
+    fontSize: 12,
+    lineHeight: 18,
   },
   button: {
     minHeight: 42,
