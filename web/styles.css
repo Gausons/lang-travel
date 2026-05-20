@@ -110,6 +110,55 @@ body {
   margin-bottom: 8px;
 }
 
+.preference-chat-card {
+  background: linear-gradient(180deg, #f7fbff, #eef6ff);
+}
+
+.chat-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.chat-input {
+  min-height: 72px;
+  flex: 1;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.chat-input-row button {
+  min-width: 64px;
+}
+
+.chat-messages {
+  display: grid;
+  gap: 7px;
+  max-height: 190px;
+  overflow: auto;
+}
+
+.chat-bubble {
+  max-width: 92%;
+  white-space: pre-wrap;
+  border-radius: 12px;
+  padding: 9px 10px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.chat-bubble-assistant {
+  justify-self: start;
+  color: #29415f;
+  background: #e8f2ff;
+}
+
+.chat-bubble-user {
+  justify-self: end;
+  color: #fff;
+  background: var(--brand);
+}
+
 label {
   display: grid;
   gap: 4px;
@@ -119,12 +168,14 @@ label {
 
 input,
 select,
+textarea,
 button {
   font: inherit;
 }
 
 input,
-select {
+select,
+textarea {
   border: 1px solid var(--line);
   background: #fff;
   color: var(--ink);

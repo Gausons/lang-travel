@@ -34,6 +34,21 @@
           <p>地图式周边游玩 Agent</p>
         </header>
 
+        <section class="card preference-chat-card">
+          <h2>AI 多轮偏好聊天</h2>
+          <p class="hint">可以连续聊兴趣、作息、交通、预算和雷点，我会同步写入下方 Agent 偏好。</p>
+          <div class="chat-input-row">
+            <textarea
+              id="preference-chat-input"
+              class="chat-input"
+              rows="3"
+              placeholder="例如：我喜欢博物馆和咖啡，不想早起，少走路"
+            ></textarea>
+            <button id="btn-preference-chat" type="button">发送</button>
+          </div>
+          <div id="preference-chat-messages" class="chat-messages"></div>
+        </section>
+
         <section class="card">
           <div class="row row-between">
             <h2>当前位置</h2>

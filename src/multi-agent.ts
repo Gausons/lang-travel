@@ -423,7 +423,7 @@ export class MultiAgentOrchestrator {
       return null;
     }
 
-    const model = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
+    const model = process.env.OPENAI_MODEL || process.env.OPENAI_CHAT_MODEL || 'gpt-5.4-mini';
     const payload = {
       model,
       temperature: 0.2,

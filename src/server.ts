@@ -10,6 +10,7 @@ import { isFilledSecret } from './map-provider.js';
 import { createMapProvider, listMapProviderNames } from './map-providers.js';
 import { MultiAgentOrchestrator } from './multi-agent.js';
 import { TravelPlannerAgent } from './planner.js';
+import { resolvePreferenceChat, type PreferenceChatMessage } from './preference-chat.js';
 import type { Category, Place, Prefer, RouteResult, RouteStop } from './types.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -596,6 +597,47 @@ const server = http.createServer(async (req, res) => {
         hotels: result.hotels.length,
         routeSource: result.route.source,
         aiApplied: result.executionTrace.some((x) => x.includes('ai_decision_agent: applied')),
+      });
+      return;
+    }
+
+    if (pathname === '/api/preference-chat' && req.method === 'POST') {
+      const body = (await readBody(req)) as {
+        message?: string;
+        interests?: string[];
+        habits?: string[];
+        prefer?: Prefer;
+        history?: PreferenceChatMessage[];
+      };
+      const message = String(body.message ?? '').trim();
+      if (!message) {
+        sendJson(res, 400, { error: 'message 为必填' });
+        return;
+      }
+      const result = await resolvePreferenceChat({
+        message,
+        interests: Array.isArray(body.interests)
+          ? body.interests.map((s) => String(s).trim()).filter(Boolean)
+          : [],
+        habits: Array.isArray(body.habits)
+          ? body.habits.map((s) => String(s).trim()).filter(Boolean)
+          : [],
+        prefer: (body.prefer ?? 'mixed') as Prefer,
+        history: Array.isArray(body.history)
+          ? body.history
+              .map((item): PreferenceChatMessage => ({
+                role: item?.role === 'user' ? 'user' : 'assistant',
+                text: String(item?.text ?? '').trim(),
+              }))
+              .filter((item) => item.text)
+          : [],
+      });
+      sendJson(res, 200, result);
+      log('info', 'preference.chat.output', {
+        ...requestMeta,
+        aiApplied: result.aiApplied,
+        interests: result.interests.length,
+        habits: result.habits.length,
       });
       return;
     }

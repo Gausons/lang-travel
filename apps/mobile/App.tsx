@@ -31,6 +31,7 @@ import {
   fetchPlaces,
   fetchRoute,
   reverseGeocode,
+  sendPreferenceChat,
 } from './src/api';
 
 type Panel = 'places' | 'parks' | 'route' | 'agent';
@@ -48,6 +49,18 @@ type LatLng = {
 
 type LocatedContext = TravelContext & {
   provider: 'gaode' | 'expo';
+};
+
+type ChatMessage = {
+  id: string;
+  role: 'assistant' | 'user';
+  text: string;
+};
+
+type PreferencePatch = {
+  interests: string[];
+  habits: string[];
+  prefer?: Prefer;
 };
 
 const DEFAULT_CONTEXT: TravelContext = {
@@ -87,6 +100,100 @@ function splitList(value: string): string[] {
     .split(',')
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function appendListValues(current: string, values: string[]): string {
+  const next = new Set(splitList(current));
+  for (const value of values) {
+    const item = value.trim();
+    if (item) {
+      next.add(item);
+    }
+  }
+  return [...next].join(',');
+}
+
+function inferPreferencePatch(message: string): PreferencePatch {
+  const interests: string[] = [];
+  const habits: string[] = [];
+  const addIfMatch = (pattern: RegExp, value: string, target: string[]): void => {
+    if (pattern.test(message) && !target.includes(value)) {
+      target.push(value);
+    }
+  };
+
+  addIfMatch(/公园|绿地|自然|湖|散步|走走/, '公园', interests);
+  addIfMatch(/美食|餐厅|小吃|吃|咖啡|甜品/, '美食', interests);
+  addIfMatch(/博物馆|展览|美术馆|艺术|历史/, '博物馆展览', interests);
+  addIfMatch(/地标|建筑|城市|打卡|景点/, '地标景点', interests);
+  addIfMatch(/夜景|夜游|酒吧|live|演出/, '夜生活', interests);
+  addIfMatch(/亲子|孩子|儿童|带娃/, '亲子', interests);
+  addIfMatch(/购物|商场|买东西/, '购物', interests);
+  addIfMatch(/摄影|拍照|出片/, '摄影', interests);
+  addIfMatch(/小众|人少|安静|避开人多/, '小众安静', interests);
+
+  if (/不早起|不想早起|晚起|睡懒觉|下午开始/.test(message)) {
+    habits.push('不早起');
+  } else {
+    addIfMatch(/早起|上午|清晨/, '早起', habits);
+  }
+  addIfMatch(/少走|不想走|走不动|打车/, '少走路', habits);
+  addIfMatch(/多走|徒步|步行|citywalk|city walk/i, '步行可接受', habits);
+  addIfMatch(/地铁|公交|公共交通/, '地铁优先', habits);
+  addIfMatch(/慢节奏|轻松|松弛|不要太赶/, '慢节奏', habits);
+  addIfMatch(/紧凑|多玩|尽量多/, '紧凑行程', habits);
+  addIfMatch(/预算|省钱|便宜|性价比/, '预算友好', habits);
+  addIfMatch(/舒适|酒店好|住好一点/, '住宿舒适优先', habits);
+
+  if (/只.*公园|公园.*为主|自然.*为主/.test(message)) {
+    return { interests, habits, prefer: 'park' };
+  }
+  if (/景点.*为主|地标.*为主|博物馆.*为主/.test(message)) {
+    return { interests, habits, prefer: 'attraction' };
+  }
+  return { interests, habits };
+}
+
+function hasAny(values: string[], patterns: RegExp[]): boolean {
+  return values.some((value) => patterns.some((pattern) => pattern.test(value)));
+}
+
+function nextPreferenceQuestion(interests: string[], habits: string[]): string {
+  if (!hasAny(habits, [/早起|不早起|晚起|下午/])) {
+    return '你更偏早出门，还是想睡到自然醒、下午开始？';
+  }
+  if (!hasAny(habits, [/少走|步行|地铁|打车|公共交通/])) {
+    return '交通上你能接受多走路吗，还是希望地铁/打车优先？';
+  }
+  if (!hasAny(habits, [/预算|省钱|性价比|舒适|住宿/])) {
+    return '预算和住宿上，你更想省钱，还是住得舒服一点？';
+  }
+  if (!hasAny(interests, [/小众|夜生活|摄影|亲子|购物/])) {
+    return '还有没有特别想加的风格，比如小众、人少、夜景、摄影、亲子或购物？';
+  }
+  return '还有什么雷点或硬性限制，也可以继续告诉我。准备好了就点“一键自主规划”。';
+}
+
+function buildChatReply(args: {
+  patch: PreferencePatch;
+  interests: string[];
+  habits: string[];
+}): string {
+  const learned: string[] = [];
+  if (args.patch.interests.length > 0) {
+    learned.push(`兴趣：${args.patch.interests.join('、')}`);
+  }
+  if (args.patch.habits.length > 0) {
+    learned.push(`习惯/限制：${args.patch.habits.join('、')}`);
+  }
+  if (args.patch.prefer) {
+    learned.push(`路线倾向：${args.patch.prefer === 'park' ? '公园自然为主' : '景点地标为主'}`);
+  }
+  const prefix =
+    learned.length > 0
+      ? `收到，已更新${learned.join('；')}。`
+      : '收到，我先把这句作为补充偏好记录下来。';
+  return `${prefix}\n${nextPreferenceQuestion(args.interests, args.habits)}`;
 }
 
 function positionOf(lat: number, lon: number): LatLng {
@@ -175,6 +282,14 @@ export default function App() {
   const [hotelBudget, setHotelBudget] = useState('600');
   const [interests, setInterests] = useState('公园,美食,地标');
   const [habits, setHabits] = useState('早起,步行可接受,地铁优先');
+  const [chatDraft, setChatDraft] = useState('');
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
+    {
+      id: 'welcome',
+      role: 'assistant',
+      text: '我们可以多轮聊偏好。先告诉我你的旅行口味，比如“我不想早起，喜欢小众咖啡和博物馆，少走路”。',
+    },
+  ]);
 
   const context = useMemo<TravelContext>(() => {
     const lat = Number(contextForm.lat);
@@ -346,6 +461,63 @@ export default function App() {
     });
   }
 
+  async function addPreferenceFromChat(): Promise<void> {
+    const message = chatDraft.trim();
+    if (!message) {
+      return;
+    }
+    const now = Date.now();
+    const userMessage: ChatMessage = { id: `user-${now}`, role: 'user', text: message };
+
+    try {
+      const result = await sendPreferenceChat({
+        message,
+        interests: splitList(interests),
+        habits: splitList(habits),
+        prefer,
+        history: chatMessages.map((item) => ({ role: item.role, text: item.text })),
+      });
+      setInterests(result.interests.join(','));
+      setHabits(result.habits.join(','));
+      setPrefer(result.prefer);
+      setChatMessages((prev) => [
+        ...prev,
+        userMessage,
+        {
+          id: `assistant-${now}`,
+          role: 'assistant',
+          text: result.reply,
+        },
+      ]);
+    } catch {
+      const patch = inferPreferencePatch(message);
+      const nextInterests = patch.interests;
+      const nextHabits = [...patch.habits, `用户补充：${message}`];
+      const mergedInterests = appendListValues(interests, nextInterests);
+      const mergedHabits = appendListValues(habits, nextHabits);
+      setInterests(mergedInterests);
+      setHabits(mergedHabits);
+      if (patch.prefer) {
+        setPrefer(patch.prefer);
+      }
+      setChatMessages((prev) => [
+        ...prev,
+        userMessage,
+        {
+          id: `assistant-${now}`,
+          role: 'assistant',
+          text: buildChatReply({
+            patch,
+            interests: splitList(mergedInterests),
+            habits: splitList(mergedHabits),
+          }),
+        },
+      ]);
+    } finally {
+      setChatDraft('');
+    }
+  }
+
   async function generateAgentPlan(): Promise<void> {
     await runTask('Agent 规划', async () => {
       const result = await fetchAgentPlan(readContext(), {
@@ -454,6 +626,13 @@ export default function App() {
           </View>
 
           {error ? <Text style={styles.error}>{error}</Text> : null}
+
+          <ChatPreferenceBox
+            chatDraft={chatDraft}
+            chatMessages={chatMessages}
+            onChatDraftChange={setChatDraft}
+            onSubmitPreferenceChat={addPreferenceFromChat}
+          />
 
           <View style={styles.formBlock}>
             <View style={styles.formRow}>
@@ -589,6 +768,56 @@ function ActionButton(props: {
 
 function EmptyState({ text }: { text: string }) {
   return <Text style={styles.empty}>{text}</Text>;
+}
+
+function ChatPreferenceBox(props: {
+  chatDraft: string;
+  chatMessages: ChatMessage[];
+  onChatDraftChange: (value: string) => void;
+  onSubmitPreferenceChat: () => void;
+}) {
+  return (
+    <View style={styles.aiChatBox}>
+      <Text style={styles.aiChatTitle}>AI 多轮偏好聊天</Text>
+      <Text style={styles.aiChatSubtitle}>
+        可以连续聊兴趣、作息、交通、预算和雷点，我会持续写入规划偏好。
+      </Text>
+      <View style={styles.chatInputRow}>
+        <TextInput
+          value={props.chatDraft}
+          onChangeText={props.onChatDraftChange}
+          placeholder="例如：我喜欢博物馆和咖啡，不想早起，少走路"
+          multiline
+          style={styles.chatInput}
+          placeholderTextColor="#8190A6"
+        />
+        <Pressable
+          onPress={props.onSubmitPreferenceChat}
+          style={({ pressed }) => [styles.chatSendButton, pressed && styles.buttonPressed]}
+        >
+          <Text style={styles.chatSendButtonText}>发送</Text>
+        </Pressable>
+      </View>
+      <View style={styles.chatMessages}>
+        {props.chatMessages.slice(-8).map((message) => {
+          const isUser = message.role === 'user';
+          return (
+            <View
+              key={message.id}
+              style={[
+                styles.chatBubble,
+                isUser ? styles.chatBubbleUser : styles.chatBubbleAssistant,
+              ]}
+            >
+              <Text style={[styles.chatBubbleText, isUser && styles.chatBubbleTextUser]}>
+                {message.text}
+              </Text>
+            </View>
+          );
+        })}
+      </View>
+    </View>
+  );
 }
 
 function PlacesPanel({ places }: { places: Place[] }) {
@@ -886,6 +1115,82 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 10,
     fontSize: 12,
+  },
+  aiChatBox: {
+    gap: 8,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#DCE8F7',
+    borderRadius: 12,
+    padding: 12,
+    backgroundColor: '#F7FAFF',
+  },
+  aiChatTitle: {
+    color: '#172236',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  aiChatSubtitle: {
+    color: '#667891',
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  chatMessages: {
+    gap: 7,
+  },
+  chatBubble: {
+    maxWidth: '92%',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  chatBubbleAssistant: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#EAF2FF',
+  },
+  chatBubbleUser: {
+    alignSelf: 'flex-end',
+    backgroundColor: '#0F6EFF',
+  },
+  chatBubbleText: {
+    color: '#29415F',
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  chatBubbleTextUser: {
+    color: '#FFFFFF',
+  },
+  chatInputRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 8,
+  },
+  chatInput: {
+    flex: 1,
+    minHeight: 48,
+    maxHeight: 96,
+    borderWidth: 1,
+    borderColor: '#D4DEEA',
+    borderRadius: 9,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    color: '#172236',
+    backgroundColor: '#FFFFFF',
+    fontSize: 13,
+  },
+  chatSendButton: {
+    minHeight: 42,
+    minWidth: 58,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 9,
+    backgroundColor: '#0F6EFF',
+    paddingHorizontal: 12,
+  },
+  chatSendButtonText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '800',
   },
   formBlock: {
     gap: 8,

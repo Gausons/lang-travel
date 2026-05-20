@@ -121,6 +121,19 @@ export type RegeoResponse = {
   warning?: string;
 };
 
+export type PreferenceChatMessage = {
+  role: 'assistant' | 'user';
+  text: string;
+};
+
+export type PreferenceChatResponse = {
+  reply: string;
+  interests: string[];
+  habits: string[];
+  prefer: Prefer;
+  aiApplied: boolean;
+};
+
 const defaultApiBase =
   Platform.OS === 'android' ? 'http://10.0.2.2:3000' : 'http://127.0.0.1:3000';
 
@@ -217,5 +230,18 @@ export function fetchAgentPlan(
       city: ctx.city,
       ...input,
     }),
+  });
+}
+
+export function sendPreferenceChat(input: {
+  message: string;
+  interests: string[];
+  habits: string[];
+  prefer: Prefer;
+  history: PreferenceChatMessage[];
+}): Promise<PreferenceChatResponse> {
+  return request<PreferenceChatResponse>('/api/preference-chat', {
+    method: 'POST',
+    body: JSON.stringify(input),
   });
 }

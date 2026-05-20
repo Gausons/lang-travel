@@ -18,7 +18,181 @@ const state = {
   routeLines: [],
   myMarker: null,
   source: 'local',
+  preferenceChatMessages: [
+    {
+      id: 'welcome',
+      role: 'assistant',
+      text: '我们可以多轮聊偏好。先告诉我你的旅行口味，比如“我不想早起，喜欢小众咖啡和博物馆，少走路”。',
+    },
+  ],
 };
+
+function splitList(value) {
+  return String(value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function appendListValues(current, values) {
+  const next = new Set(splitList(current));
+  for (const value of values) {
+    const item = String(value || '').trim();
+    if (item) {
+      next.add(item);
+    }
+  }
+  return [...next].join(',');
+}
+
+function inferPreferencePatch(message) {
+  const interests = [];
+  const habits = [];
+  const addIfMatch = (pattern, value, target) => {
+    if (pattern.test(message) && !target.includes(value)) {
+      target.push(value);
+    }
+  };
+
+  addIfMatch(/公园|绿地|自然|湖|散步|走走/, '公园', interests);
+  addIfMatch(/美食|餐厅|小吃|吃|咖啡|甜品/, '美食', interests);
+  addIfMatch(/博物馆|展览|美术馆|艺术|历史/, '博物馆展览', interests);
+  addIfMatch(/地标|建筑|城市|打卡|景点/, '地标景点', interests);
+  addIfMatch(/夜景|夜游|酒吧|live|演出/, '夜生活', interests);
+  addIfMatch(/亲子|孩子|儿童|带娃/, '亲子', interests);
+  addIfMatch(/购物|商场|买东西/, '购物', interests);
+  addIfMatch(/摄影|拍照|出片/, '摄影', interests);
+  addIfMatch(/小众|人少|安静|避开人多/, '小众安静', interests);
+
+  if (/不早起|不想早起|晚起|睡懒觉|下午开始/.test(message)) {
+    habits.push('不早起');
+  } else {
+    addIfMatch(/早起|上午|清晨/, '早起', habits);
+  }
+  addIfMatch(/少走|不想走|走不动|打车/, '少走路', habits);
+  addIfMatch(/多走|徒步|步行|citywalk|city walk/i, '步行可接受', habits);
+  addIfMatch(/地铁|公交|公共交通/, '地铁优先', habits);
+  addIfMatch(/慢节奏|轻松|松弛|不要太赶/, '慢节奏', habits);
+  addIfMatch(/紧凑|多玩|尽量多/, '紧凑行程', habits);
+  addIfMatch(/预算|省钱|便宜|性价比/, '预算友好', habits);
+  addIfMatch(/舒适|酒店好|住好一点/, '住宿舒适优先', habits);
+
+  if (/只.*公园|公园.*为主|自然.*为主/.test(message)) {
+    return { interests, habits, prefer: 'park' };
+  }
+  if (/景点.*为主|地标.*为主|博物馆.*为主/.test(message)) {
+    return { interests, habits, prefer: 'attraction' };
+  }
+  return { interests, habits };
+}
+
+function hasAny(values, patterns) {
+  return values.some((value) => patterns.some((pattern) => pattern.test(value)));
+}
+
+function nextPreferenceQuestion(interests, habits) {
+  if (!hasAny(habits, [/早起|不早起|晚起|下午/])) {
+    return '你更偏早出门，还是想睡到自然醒、下午开始？';
+  }
+  if (!hasAny(habits, [/少走|步行|地铁|打车|公共交通/])) {
+    return '交通上你能接受多走路吗，还是希望地铁/打车优先？';
+  }
+  if (!hasAny(habits, [/预算|省钱|性价比|舒适|住宿/])) {
+    return '预算和住宿上，你更想省钱，还是住得舒服一点？';
+  }
+  if (!hasAny(interests, [/小众|夜生活|摄影|亲子|购物/])) {
+    return '还有没有特别想加的风格，比如小众、人少、夜景、摄影、亲子或购物？';
+  }
+  return '还有什么雷点或硬性限制，也可以继续告诉我。准备好了就点“一键自主规划”。';
+}
+
+function buildChatReply({ patch, interests, habits }) {
+  const learned = [];
+  if (patch.interests.length > 0) {
+    learned.push(`兴趣：${patch.interests.join('、')}`);
+  }
+  if (patch.habits.length > 0) {
+    learned.push(`习惯/限制：${patch.habits.join('、')}`);
+  }
+  if (patch.prefer) {
+    learned.push(`路线倾向：${patch.prefer === 'park' ? '公园自然为主' : '景点地标为主'}`);
+  }
+  const prefix =
+    learned.length > 0
+      ? `收到，已更新${learned.join('；')}。`
+      : '收到，我先把这句作为补充偏好记录下来。';
+  return `${prefix}\n${nextPreferenceQuestion(interests, habits)}`;
+}
+
+function renderPreferenceChat() {
+  const box = $('preference-chat-messages');
+  if (!box) {
+    return;
+  }
+  box.innerHTML = '';
+  for (const message of state.preferenceChatMessages.slice(-8)) {
+    const bubble = document.createElement('div');
+    bubble.className = `chat-bubble chat-bubble-${message.role}`;
+    bubble.textContent = message.text;
+    box.appendChild(bubble);
+  }
+  box.scrollTop = box.scrollHeight;
+}
+
+async function submitPreferenceChat() {
+  const input = $('preference-chat-input');
+  const message = input?.value.trim();
+  if (!message) {
+    return;
+  }
+  const now = Date.now();
+  const userMessage = { id: `user-${now}`, role: 'user', text: message };
+
+  try {
+    const result = await api('/api/preference-chat', {
+      method: 'POST',
+      body: JSON.stringify({
+        message,
+        interests: splitList($('agent-interests').value),
+        habits: splitList($('agent-habits').value),
+        prefer: $('route-prefer').value,
+        history: state.preferenceChatMessages.map(({ role, text }) => ({ role, text })),
+      }),
+    });
+    $('agent-interests').value = (result.interests || []).join(',');
+    $('agent-habits').value = (result.habits || []).join(',');
+    if (result.prefer) {
+      $('route-prefer').value = result.prefer;
+    }
+    state.preferenceChatMessages.push(userMessage, {
+      id: `assistant-${now}`,
+      role: 'assistant',
+      text: result.reply || '已更新偏好。你可以继续补充，或点“一键自主规划”。',
+    });
+  } catch {
+    const patch = inferPreferencePatch(message);
+    const nextInterests = patch.interests;
+    const nextHabits = [...patch.habits, `用户补充：${message}`];
+    const mergedInterests = appendListValues($('agent-interests').value, nextInterests);
+    const mergedHabits = appendListValues($('agent-habits').value, nextHabits);
+    $('agent-interests').value = mergedInterests;
+    $('agent-habits').value = mergedHabits;
+    if (patch.prefer) {
+      $('route-prefer').value = patch.prefer;
+    }
+    state.preferenceChatMessages.push(userMessage, {
+      id: `assistant-${now}`,
+      role: 'assistant',
+      text: buildChatReply({
+        patch,
+        interests: splitList(mergedInterests),
+        habits: splitList(mergedHabits),
+      }),
+    });
+  }
+  input.value = '';
+  renderPreferenceChat();
+}
 
 function getCtx() {
   return {
@@ -621,14 +795,8 @@ async function runAgentPlan() {
   const dailyHours = Number($('agent-hours').value || 6);
   const totalBudgetCny = Number($('agent-budget-total').value || 3000);
   const hotelBudgetPerNight = Number($('agent-budget-hotel').value || 600);
-  const interests = $('agent-interests')
-    .value.split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
-  const habits = $('agent-habits')
-    .value.split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const interests = splitList($('agent-interests').value);
+  const habits = splitList($('agent-habits').value);
   const prefer = $('route-prefer').value;
 
   const result = await api('/api/agent/plan', {
@@ -679,6 +847,13 @@ async function runAgentPlan() {
 }
 
 function bind() {
+  renderPreferenceChat();
+  $('btn-preference-chat')?.addEventListener('click', submitPreferenceChat);
+  $('preference-chat-input')?.addEventListener('keydown', (event) => {
+    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+      submitPreferenceChat().catch((e) => alert(e.message));
+    }
+  });
   $('btn-locate')?.addEventListener('click', () =>
     locateCurrent().catch((e) => alert(e.message)),
   );
