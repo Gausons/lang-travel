@@ -10,7 +10,11 @@ import { isFilledSecret } from './map-provider.js';
 import { createMapProvider, listMapProviderNames } from './map-providers.js';
 import { MultiAgentOrchestrator } from './multi-agent.js';
 import { TravelPlannerAgent } from './planner.js';
-import { resolvePreferenceChat, type PreferenceChatMessage } from './preference-chat.js';
+import {
+  PreferenceChatAiError,
+  resolvePreferenceChat,
+  type PreferenceChatMessage,
+} from './preference-chat.js';
 import type { Category, Place, Prefer, RouteResult, RouteStop } from './types.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -678,7 +682,7 @@ const server = http.createServer(async (req, res) => {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log('error', 'request.error', { ...requestMeta, error: msg });
-    sendJson(res, 500, { error: msg });
+    sendJson(res, err instanceof PreferenceChatAiError ? err.statusCode : 500, { error: msg });
   } finally {
     log('info', 'request.end', {
       ...requestMeta,

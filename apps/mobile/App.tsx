@@ -57,12 +57,6 @@ type ChatMessage = {
   text: string;
 };
 
-type PreferencePatch = {
-  interests: string[];
-  habits: string[];
-  prefer?: Prefer;
-};
-
 const DEFAULT_CONTEXT: TravelContext = {
   lat: 31.2304,
   lon: 121.4737,
@@ -100,100 +94,6 @@ function splitList(value: string): string[] {
     .split(',')
     .map((item) => item.trim())
     .filter(Boolean);
-}
-
-function appendListValues(current: string, values: string[]): string {
-  const next = new Set(splitList(current));
-  for (const value of values) {
-    const item = value.trim();
-    if (item) {
-      next.add(item);
-    }
-  }
-  return [...next].join(',');
-}
-
-function inferPreferencePatch(message: string): PreferencePatch {
-  const interests: string[] = [];
-  const habits: string[] = [];
-  const addIfMatch = (pattern: RegExp, value: string, target: string[]): void => {
-    if (pattern.test(message) && !target.includes(value)) {
-      target.push(value);
-    }
-  };
-
-  addIfMatch(/公园|绿地|自然|湖|散步|走走/, '公园', interests);
-  addIfMatch(/美食|餐厅|小吃|吃|咖啡|甜品/, '美食', interests);
-  addIfMatch(/博物馆|展览|美术馆|艺术|历史/, '博物馆展览', interests);
-  addIfMatch(/地标|建筑|城市|打卡|景点/, '地标景点', interests);
-  addIfMatch(/夜景|夜游|酒吧|live|演出/, '夜生活', interests);
-  addIfMatch(/亲子|孩子|儿童|带娃/, '亲子', interests);
-  addIfMatch(/购物|商场|买东西/, '购物', interests);
-  addIfMatch(/摄影|拍照|出片/, '摄影', interests);
-  addIfMatch(/小众|人少|安静|避开人多/, '小众安静', interests);
-
-  if (/不早起|不想早起|晚起|睡懒觉|下午开始/.test(message)) {
-    habits.push('不早起');
-  } else {
-    addIfMatch(/早起|上午|清晨/, '早起', habits);
-  }
-  addIfMatch(/少走|不想走|走不动|打车/, '少走路', habits);
-  addIfMatch(/多走|徒步|步行|citywalk|city walk/i, '步行可接受', habits);
-  addIfMatch(/地铁|公交|公共交通/, '地铁优先', habits);
-  addIfMatch(/慢节奏|轻松|松弛|不要太赶/, '慢节奏', habits);
-  addIfMatch(/紧凑|多玩|尽量多/, '紧凑行程', habits);
-  addIfMatch(/预算|省钱|便宜|性价比/, '预算友好', habits);
-  addIfMatch(/舒适|酒店好|住好一点/, '住宿舒适优先', habits);
-
-  if (/只.*公园|公园.*为主|自然.*为主/.test(message)) {
-    return { interests, habits, prefer: 'park' };
-  }
-  if (/景点.*为主|地标.*为主|博物馆.*为主/.test(message)) {
-    return { interests, habits, prefer: 'attraction' };
-  }
-  return { interests, habits };
-}
-
-function hasAny(values: string[], patterns: RegExp[]): boolean {
-  return values.some((value) => patterns.some((pattern) => pattern.test(value)));
-}
-
-function nextPreferenceQuestion(interests: string[], habits: string[]): string {
-  if (!hasAny(habits, [/早起|不早起|晚起|下午/])) {
-    return '你更偏早出门，还是想睡到自然醒、下午开始？';
-  }
-  if (!hasAny(habits, [/少走|步行|地铁|打车|公共交通/])) {
-    return '交通上你能接受多走路吗，还是希望地铁/打车优先？';
-  }
-  if (!hasAny(habits, [/预算|省钱|性价比|舒适|住宿/])) {
-    return '预算和住宿上，你更想省钱，还是住得舒服一点？';
-  }
-  if (!hasAny(interests, [/小众|夜生活|摄影|亲子|购物/])) {
-    return '还有没有特别想加的风格，比如小众、人少、夜景、摄影、亲子或购物？';
-  }
-  return '还有什么雷点或硬性限制，也可以继续告诉我。准备好了就点“一键自主规划”。';
-}
-
-function buildChatReply(args: {
-  patch: PreferencePatch;
-  interests: string[];
-  habits: string[];
-}): string {
-  const learned: string[] = [];
-  if (args.patch.interests.length > 0) {
-    learned.push(`兴趣：${args.patch.interests.join('、')}`);
-  }
-  if (args.patch.habits.length > 0) {
-    learned.push(`习惯/限制：${args.patch.habits.join('、')}`);
-  }
-  if (args.patch.prefer) {
-    learned.push(`路线倾向：${args.patch.prefer === 'park' ? '公园自然为主' : '景点地标为主'}`);
-  }
-  const prefix =
-    learned.length > 0
-      ? `收到，已更新${learned.join('；')}。`
-      : '收到，我先把这句作为补充偏好记录下来。';
-  return `${prefix}\n${nextPreferenceQuestion(args.interests, args.habits)}`;
 }
 
 function positionOf(lat: number, lon: number): LatLng {
@@ -489,28 +389,15 @@ export default function App() {
           text: result.reply,
         },
       ]);
-    } catch {
-      const patch = inferPreferencePatch(message);
-      const nextInterests = patch.interests;
-      const nextHabits = [...patch.habits, `用户补充：${message}`];
-      const mergedInterests = appendListValues(interests, nextInterests);
-      const mergedHabits = appendListValues(habits, nextHabits);
-      setInterests(mergedInterests);
-      setHabits(mergedHabits);
-      if (patch.prefer) {
-        setPrefer(patch.prefer);
-      }
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : '未知错误';
       setChatMessages((prev) => [
         ...prev,
         userMessage,
         {
           id: `assistant-${now}`,
           role: 'assistant',
-          text: buildChatReply({
-            patch,
-            interests: splitList(mergedInterests),
-            habits: splitList(mergedHabits),
-          }),
+          text: `这轮没有成功调用真实 AI：${reason}`,
         },
       ]);
     } finally {
