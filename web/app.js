@@ -31,10 +31,35 @@ const state = {
     {
       id: 'welcome',
       role: 'assistant',
-      text: '我们可以多轮聊偏好。先告诉我你的旅行口味，比如“我不想早起，喜欢小众咖啡和博物馆，少走路”。',
+      text: '告诉我你的旅行口味、时间、预算或雷点，我会记住偏好并用于后续规划。',
     },
   ],
 };
+
+function getTenantContext() {
+  const fallback = { tenantId: 'default', userId: 'local-user', sessionId: '' };
+  try {
+    const tenantId = localStorage.getItem('langTravelTenantId') || fallback.tenantId;
+    const userId = localStorage.getItem('langTravelUserId') || fallback.userId;
+    let sessionId = localStorage.getItem('langTravelSessionId') || '';
+    if (!sessionId) {
+      sessionId = `session-${Date.now()}`;
+      localStorage.setItem('langTravelSessionId', sessionId);
+    }
+    return { tenantId, userId, sessionId };
+  } catch {
+    return fallback;
+  }
+}
+
+function tenantHeaders() {
+  const ctx = getTenantContext();
+  return {
+    'x-tenant-id': ctx.tenantId,
+    'x-user-id': ctx.userId,
+    'x-session-id': ctx.sessionId,
+  };
+}
 
 function splitList(value) {
   return String(value || '')
@@ -49,13 +74,36 @@ function renderPreferenceChat() {
     return;
   }
   box.innerHTML = '';
-  for (const message of state.preferenceChatMessages.slice(-8)) {
+  for (const message of state.preferenceChatMessages.slice(-16)) {
     const bubble = document.createElement('div');
     bubble.className = `chat-bubble chat-bubble-${message.role}`;
     bubble.textContent = message.text;
     box.appendChild(bubble);
   }
   box.scrollTop = box.scrollHeight;
+}
+
+function resizeChatInput() {
+  const input = $('preference-chat-input');
+  if (!input) {
+    return;
+  }
+  input.style.height = 'auto';
+  input.style.height = `${Math.min(input.scrollHeight, 150)}px`;
+}
+
+function setButtonBusy(id, busyText) {
+  const button = $(id);
+  if (!button) {
+    return () => {};
+  }
+  const normalText = button.textContent;
+  button.disabled = true;
+  button.textContent = busyText;
+  return () => {
+    button.disabled = false;
+    button.textContent = normalText;
+  };
 }
 
 async function submitPreferenceChat() {
@@ -66,6 +114,12 @@ async function submitPreferenceChat() {
   }
   const now = Date.now();
   const userMessage = { id: `user-${now}`, role: 'user', text: message };
+  const history = state.preferenceChatMessages.map(({ role, text }) => ({ role, text }));
+  state.preferenceChatMessages.push(userMessage);
+  input.value = '';
+  resizeChatInput();
+  renderPreferenceChat();
+  const restoreButton = setButtonBusy('btn-preference-chat', '发送中');
 
   try {
     const result = await api('/api/preference-chat', {
@@ -75,7 +129,7 @@ async function submitPreferenceChat() {
         interests: splitList($('agent-interests').value),
         habits: splitList($('agent-habits').value),
         prefer: $('route-prefer').value,
-        history: state.preferenceChatMessages.map(({ role, text }) => ({ role, text })),
+        history,
       }),
     });
     $('agent-interests').value = (result.interests || []).join(',');
@@ -83,21 +137,21 @@ async function submitPreferenceChat() {
     if (result.prefer) {
       $('route-prefer').value = result.prefer;
     }
-    state.preferenceChatMessages.push(userMessage, {
+    state.preferenceChatMessages.push({
       id: `assistant-${now}`,
       role: 'assistant',
       text: result.reply || '已更新偏好。你可以继续补充，或点“一键自主规划”。',
     });
   } catch (err) {
     const reason = err instanceof Error ? err.message : '未知错误';
-    state.preferenceChatMessages.push(userMessage, {
+    state.preferenceChatMessages.push({
       id: `assistant-${now}`,
       role: 'assistant',
       text: `这轮没有成功调用真实 AI：${reason}`,
     });
   }
-  input.value = '';
   renderPreferenceChat();
+  restoreButton();
 }
 
 function getCtx() {
@@ -241,8 +295,12 @@ function setChip(id, text) {
 
 async function api(url, options) {
   const res = await fetch(url, {
-    headers: { 'content-type': 'application/json' },
     ...options,
+    headers: {
+      'content-type': 'application/json',
+      ...tenantHeaders(),
+      ...(options?.headers ?? {}),
+    },
   });
   const text = await res.text();
   let data = {};
@@ -255,6 +313,37 @@ async function api(url, options) {
     throw new Error(data.error || '请求失败');
   }
   return data;
+}
+
+async function loadMemory() {
+  try {
+    const result = await api('/api/memory');
+    const preferences = result.memory?.preferences;
+    if (!preferences) {
+      return;
+    }
+    if (Array.isArray(preferences.interests) && preferences.interests.length > 0) {
+      $('agent-interests').value = preferences.interests.join(',');
+    }
+    const habits = [
+      ...(Array.isArray(preferences.habits) ? preferences.habits : []),
+      ...(Array.isArray(preferences.constraints) ? preferences.constraints : []),
+    ];
+    if (habits.length > 0) {
+      $('agent-habits').value = [...new Set(habits)].join(',');
+    }
+    if (preferences.prefer && $('route-prefer')) {
+      $('route-prefer').value = preferences.prefer;
+    }
+    if (preferences.budget?.totalCny) {
+      $('agent-budget-total').value = String(preferences.budget.totalCny);
+    }
+    if (preferences.budget?.hotelPerNightCny) {
+      $('agent-budget-hotel').value = String(preferences.budget.hotelPerNightCny);
+    }
+  } catch {
+    // 记忆加载失败不阻断地图和基础规划
+  }
 }
 
 function loadAmapSdk(key, securityJsCode) {
@@ -702,6 +791,11 @@ async function planRoute() {
 }
 
 async function runAgentPlan() {
+  const output = $('agent-result');
+  const restoreButton = setButtonBusy('btn-agent-plan', '规划中');
+  if (output) {
+    output.textContent = '规划中...';
+  }
   const { lat, lon, city } = getCtx();
   const days = Number($('agent-days').value || 2);
   const dailyHours = Number($('agent-hours').value || 6);
@@ -711,61 +805,76 @@ async function runAgentPlan() {
   const habits = splitList($('agent-habits').value);
   const prefer = $('route-prefer').value;
 
-  const result = await api('/api/agent/plan', {
-    method: 'POST',
-    body: JSON.stringify({
-      lat,
-      lon,
-      city,
-      days,
-      dailyHours,
-      interests,
-      habits,
-      totalBudgetCny,
-      hotelBudgetPerNight,
-      prefer,
-    }),
-  });
+  try {
+    const result = await api('/api/agent/plan', {
+      method: 'POST',
+      body: JSON.stringify({
+        lat,
+        lon,
+        city,
+        days,
+        dailyHours,
+        interests,
+        habits,
+        totalBudgetCny,
+        hotelBudgetPerNight,
+        prefer,
+      }),
+    });
 
-  const lines = [result.summary, '', '行程建议:'];
-  result.route.stops.forEach((s, i) => {
-    lines.push(
-      `${i + 1}. ${s.name} | ${s.distance_km}km | ${s.travel_min}分钟 + 游玩${s.visit_min}分钟`,
-    );
-  });
-  lines.push('', '酒店比价:');
-  result.hotels.forEach((h) => {
-    const offerText = Array.isArray(h.offers)
-      ? h.offers
-          .map((o) => `${o.source}:${o.priceCny ? `¥${o.priceCny}` : 'N/A'}`)
-          .join(' / ')
-      : '';
-    lines.push(
-      `${h.rank}. ${h.name} | 最低${h.bestPriceCny ? `¥${h.bestPriceCny}` : 'N/A'}(${
-        h.bestSource || 'unknown'
-      }) | 评分${h.rating ?? 'N/A'} | ${h.distanceKm}km`,
-    );
-    if (offerText) {
-      lines.push(`   报价源: ${offerText}`);
+    const lines = [result.summary, '', '行程建议:'];
+    result.route.stops.forEach((s, i) => {
+      lines.push(
+        `${i + 1}. ${s.name} | ${s.distance_km}km | ${s.travel_min}分钟 + 游玩${s.visit_min}分钟`,
+      );
+    });
+    lines.push('', '酒店比价:');
+    result.hotels.forEach((h) => {
+      const offerText = Array.isArray(h.offers)
+        ? h.offers
+            .map((o) => `${o.source}:${o.priceCny ? `¥${o.priceCny}` : 'N/A'}`)
+            .join(' / ')
+        : '';
+      lines.push(
+        `${h.rank}. ${h.name} | 最低${h.bestPriceCny ? `¥${h.bestPriceCny}` : 'N/A'}(${
+          h.bestSource || 'unknown'
+        }) | 评分${h.rating ?? 'N/A'} | ${h.distanceKm}km`,
+      );
+      if (offerText) {
+        lines.push(`   报价源: ${offerText}`);
+      }
+    });
+    if (Array.isArray(result.executionTrace) && result.executionTrace.length > 0) {
+      lines.push('', 'Agent 执行链路:');
+      result.executionTrace.forEach((t) => lines.push(`- ${t}`));
     }
-  });
-  if (Array.isArray(result.executionTrace) && result.executionTrace.length > 0) {
-    lines.push('', 'Agent 执行链路:');
-    result.executionTrace.forEach((t) => lines.push(`- ${t}`));
-  }
-  $('agent-result').textContent = lines.join('\n');
+    if (output) {
+      output.textContent = lines.join('\n');
+    }
 
-  renderRouteOnMap(lon, lat, result.route.stops, result.route.routePolylines);
+    renderRouteOnMap(lon, lat, result.route.stops, result.route.routePolylines);
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : '未知错误';
+    if (output) {
+      output.textContent = `规划失败: ${reason}`;
+    }
+    throw err;
+  } finally {
+    restoreButton();
+  }
 }
 
 function bind() {
   renderPreferenceChat();
+  resizeChatInput();
   $('btn-preference-chat')?.addEventListener('click', submitPreferenceChat);
   $('preference-chat-input')?.addEventListener('keydown', (event) => {
-    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
       submitPreferenceChat().catch((e) => alert(e.message));
     }
   });
+  $('preference-chat-input')?.addEventListener('input', resizeChatInput);
   $('btn-locate')?.addEventListener('click', () =>
     locateCurrent().catch((e) => alert(e.message)),
   );
@@ -788,6 +897,7 @@ function bind() {
 
 async function boot() {
   bind();
+  await loadMemory();
   try {
     await initMap();
   } catch {

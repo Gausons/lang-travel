@@ -4,137 +4,73 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Lang Travel Map</title>
+    <link rel="icon" href="data:," />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <div id="fatal" style="display:none;padding:10px 14px;background:#ffe9e9;color:#8a1f1f;font-size:13px;"></div>
+    <div id="fatal" class="fatal" style="display:none;"></div>
+
     <main class="layout">
-      <section class="map-shell">
+      <section class="map-shell" aria-label="旅行地图">
         <div id="map"></div>
-        <button id="btn-refresh" class="float-btn">刷新点位</button>
-        <div class="place-panel">
-          <div class="place-panel-head">已加载点位</div>
-          <table class="place-table">
-            <thead>
-              <tr>
-                <th>名称</th>
-                <th>类别</th>
-                <th>城市</th>
-                <th>坐标</th>
-              </tr>
-            </thead>
-            <tbody id="place-body"></tbody>
-          </table>
+      </section>
+
+      <header class="topbar">
+        <div class="brand">
+          <h1>Lang Travel</h1>
+          <p>地图式周边游玩 Agent</p>
+        </div>
+        <div class="chips" aria-live="polite">
+          <span id="chip-map" class="chip">地图: 初始化中</span>
+          <span id="chip-source" class="chip">数据源: local</span>
+          <span id="chip-locate" class="chip">定位: 未执行</span>
+        </div>
+      </header>
+
+      <section class="plan-output-shell" aria-live="polite">
+        <pre id="agent-result" class="plan-output"></pre>
+      </section>
+
+      <section class="assistant-dock" aria-label="AI 旅行偏好聊天">
+        <div id="preference-chat-messages" class="chat-messages"></div>
+        <div class="composer">
+          <textarea
+            id="preference-chat-input"
+            class="chat-input"
+            rows="1"
+            placeholder="告诉我旅行偏好、预算、时间或不想踩的雷"
+          ></textarea>
+          <div class="composer-actions">
+            <button id="btn-preference-chat" type="button" class="btn-secondary">发送</button>
+            <button id="btn-agent-plan" type="button" class="btn-primary">一键规划</button>
+          </div>
         </div>
       </section>
 
-      <aside class="sidebar">
-        <header class="brand">
-          <h1>Lang Travel</h1>
-          <p>地图式周边游玩 Agent</p>
-        </header>
-
-        <section class="card preference-chat-card">
-          <h2>AI 多轮偏好聊天</h2>
-          <p class="hint">可以连续聊兴趣、作息、交通、预算和雷点，我会同步写入下方 Agent 偏好。</p>
-          <div class="chat-input-row">
-            <textarea
-              id="preference-chat-input"
-              class="chat-input"
-              rows="3"
-              placeholder="例如：我喜欢博物馆和咖啡，不想早起，少走路"
-            ></textarea>
-            <button id="btn-preference-chat" type="button">发送</button>
-          </div>
-          <div id="preference-chat-messages" class="chat-messages"></div>
-        </section>
-
-        <section class="card">
-          <div class="row row-between">
-            <h2>当前位置</h2>
-            <button id="btn-locate" class="btn-lite">定位</button>
-          </div>
-          <div class="grid-2">
-            <label>纬度<input id="ctx-lat" value="31.2304" /></label>
-            <label>经度<input id="ctx-lon" value="121.4737" /></label>
-          </div>
-          <label>城市<input id="ctx-city" value="" placeholder="定位后自动回填" /></label>
-          <div class="chips">
-            <span id="chip-map" class="chip">地图: 初始化中</span>
-            <span id="chip-source" class="chip">数据源: local</span>
-            <span id="chip-locate" class="chip">定位: 未执行</span>
-          </div>
-        </section>
-
-        <section class="card">
-          <h2>附近公园</h2>
-          <div class="row">
-            <label>半径(km)<input id="park-radius" value="5" /></label>
-            <button id="btn-parks">查找</button>
-          </div>
-          <ul id="parks-result" class="list"></ul>
-        </section>
-
-        <section class="card">
-          <h2>路线规划</h2>
-          <div class="row">
-            <label>时长(h)<input id="route-hours" value="4" /></label>
-            <label>偏好
-              <select id="route-prefer">
-                <option value="mixed">mixed</option>
-                <option value="park">park</option>
-                <option value="attraction">attraction</option>
-              </select>
-            </label>
-            <button id="btn-route">生成</button>
-          </div>
-          <pre id="route-result" class="code"></pre>
-        </section>
-
-        <section class="card">
-          <h2>Agent 自主规划</h2>
-          <div class="grid-2">
-            <label>天数<input id="agent-days" value="2" /></label>
-            <label>每日时长(h)<input id="agent-hours" value="6" /></label>
-          </div>
-          <div class="grid-2">
-            <label>总预算(¥)<input id="agent-budget-total" value="3000" /></label>
-            <label>酒店预算/晚(¥)<input id="agent-budget-hotel" value="600" /></label>
-          </div>
-          <label>偏好标签(逗号分隔)<input id="agent-interests" value="公园,美食,地标" /></label>
-          <label>用户习惯(逗号分隔)<input id="agent-habits" value="早起,步行可接受,地铁优先" /></label>
-          <div class="row">
-            <button id="btn-agent-plan">一键自主规划</button>
-          </div>
-          <pre id="agent-result" class="code"></pre>
-        </section>
-
-        <section class="card card-add">
-          <h2>录入点位</h2>
-          <label>名称<input id="add-name" placeholder="比如：静安公园" /></label>
-          <div class="grid-2">
-            <label>类别
-              <select id="add-category">
-                <option value="park">park</option>
-                <option value="attraction">attraction</option>
-              </select>
-            </label>
-            <label>评分<input id="add-score" value="4.5" /></label>
-          </div>
-          <div class="grid-2">
-            <label>纬度<input id="add-lat" placeholder="31.2" /></label>
-            <label>经度<input id="add-lon" placeholder="121.4" /></label>
-          </div>
-          <label>城市<input id="add-city" placeholder="上海" /></label>
-          <label>标签<input id="add-tags" placeholder="散步,亲子" /></label>
-          <div class="row">
-            <label>时长(分钟)<input id="add-visit" value="60" /></label>
-            <button id="btn-add">录入</button>
-          </div>
-          <p id="add-msg" class="hint"></p>
-        </section>
-      </aside>
+      <div class="hidden-controls" aria-hidden="true">
+        <button id="btn-refresh" type="button">刷新点位</button>
+        <input id="ctx-lat" value="31.2304" />
+        <input id="ctx-lon" value="121.4737" />
+        <input id="ctx-city" value="" />
+        <input id="route-hours" value="4" />
+        <select id="route-prefer">
+          <option value="mixed">mixed</option>
+          <option value="park">park</option>
+          <option value="attraction">attraction</option>
+        </select>
+        <input id="agent-days" value="2" />
+        <input id="agent-hours" value="6" />
+        <input id="agent-budget-total" value="3000" />
+        <input id="agent-budget-hotel" value="600" />
+        <input id="agent-interests" value="公园,美食,地标" />
+        <input id="agent-habits" value="早起,步行可接受,地铁优先" />
+        <pre id="route-result"></pre>
+        <table>
+          <tbody id="place-body"></tbody>
+        </table>
+      </div>
     </main>
+
     <script type="module" src="/app.js"></script>
   </body>
-  </html>
+</html>
