@@ -1,4 +1,5 @@
 import { log } from './logger.js';
+import type { UserMemory } from './memory-types.js';
 import type { Place, Prefer, RouteResult, RouteStop } from './types.js';
 
 type AiRouteInput = {
@@ -8,6 +9,7 @@ type AiRouteInput = {
   hours: number;
   prefer: Prefer;
   candidates: Place[];
+  memory?: UserMemory;
 };
 
 type AiRouteOutput = {
@@ -179,6 +181,12 @@ export async function planRouteWithAi(input: AiRouteInput): Promise<RouteResult 
               prefer: input.prefer,
               hard_rule: 'selected_stop_ids 必须来自 candidates.id，顺序即游玩顺序',
             },
+            longTermMemory: input.memory
+              ? {
+                  profile: input.memory.profile,
+                  preferences: input.memory.preferences,
+                }
+              : null,
             candidates: limited,
           },
           null,

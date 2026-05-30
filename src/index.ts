@@ -2,8 +2,17 @@ export { PlaceStore, DATA_FILE } from './store.js';
 export { TravelPlannerAgent } from './planner.js';
 export { AmapClient } from './amap.js';
 export { GoogleMapsClient } from './google-maps.js';
+export { MemoryService } from './memory-service.js';
+export {
+  DEFAULT_MEMORY_MAX_LINES,
+  FileMemoryStore,
+  HARD_MEMORY_MAX_LINES,
+  MEMORY_ROOT_DIR,
+  resolveMemoryMaxLines,
+} from './memory-store.js';
 export { createMapProvider, listMapProviderNames, registerMapProvider } from './map-providers.js';
 export type { Category, Prefer, Place, RouteStop, RouteResult } from './types.js';
+export type { MemoryBudget, MemoryEvent, MemoryPatch, TenantContext, TravelPace, UserMemory } from './memory-types.js';
 export type {
   MapCityResult,
   MapHotelOption,

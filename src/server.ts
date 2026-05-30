@@ -8,6 +8,8 @@ import { planRouteWithAi } from './ai-route-planner.js';
 import { log } from './logger.js';
 import { isFilledSecret } from './map-provider.js';
 import { createMapProvider, listMapProviderNames } from './map-providers.js';
+import { MemoryService } from './memory-service.js';
+import type { MemoryPatch, UserMemory } from './memory-types.js';
 import { MultiAgentOrchestrator } from './multi-agent.js';
 import { TravelPlannerAgent } from './planner.js';
 import {
@@ -15,6 +17,7 @@ import {
   resolvePreferenceChat,
   type PreferenceChatMessage,
 } from './preference-chat.js';
+import { resolveTenantContext } from './tenant-context.js';
 import type { Category, Place, Prefer, RouteResult, RouteStop } from './types.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -67,6 +70,7 @@ const AMAP_SERVICE_KEY = isFilledSecret(process.env.AMAP_KEY) ? process.env.AMAP
 const agent = new TravelPlannerAgent();
 const mapProvider = createMapProvider();
 const orchestrator = new MultiAgentOrchestrator({ mapProvider, planner: agent });
+const memoryService = new MemoryService();
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -125,6 +129,65 @@ function serveStatic(reqPath: string, res: ServerResponse): void {
   const contentType = MIME[ext] ?? 'application/octet-stream';
   res.writeHead(200, { 'content-type': contentType });
   fs.createReadStream(filePath).pipe(res);
+}
+
+function cleanStringArray(values: unknown): string[] {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+  return values.map((s) => String(s).trim()).filter(Boolean);
+}
+
+function mergeStringArrays(...groups: string[][]): string[] {
+  const next = new Map<string, string>();
+  for (const group of groups) {
+    for (const value of group) {
+      const cleaned = value.trim();
+      if (cleaned) {
+        next.set(cleaned.toLowerCase(), cleaned);
+      }
+    }
+  }
+  return [...next.values()];
+}
+
+function normalizePrefer(value: unknown, fallback?: Prefer): Prefer | undefined {
+  return value === 'park' || value === 'attraction' || value === 'mixed' ? value : fallback;
+}
+
+function preferWithMemory(value: unknown, memory: UserMemory): Prefer {
+  const prefer = normalizePrefer(value, 'mixed') ?? 'mixed';
+  return prefer === 'mixed' ? memory.preferences.prefer : prefer;
+}
+
+function buildManualMemoryPatch(body: unknown): MemoryPatch {
+  if (!body || typeof body !== 'object') {
+    return {};
+  }
+  const raw = body as Record<string, unknown>;
+  const num = (value: unknown): number | undefined => {
+    const parsed = typeof value === 'number' ? value : Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+  };
+  const pace = raw.pace === 'relaxed' || raw.pace === 'normal' || raw.pace === 'packed' ? raw.pace : undefined;
+  return {
+    profile: {
+      homeCity: typeof raw.homeCity === 'string' ? raw.homeCity.trim() : undefined,
+      language: typeof raw.language === 'string' ? raw.language.trim() : undefined,
+      travelStyleAdd: cleanStringArray(raw.travelStyleAdd),
+    },
+    interestsAdd: cleanStringArray(raw.interestsAdd ?? raw.interests),
+    habitsAdd: cleanStringArray(raw.habitsAdd ?? raw.habits),
+    dislikesAdd: cleanStringArray(raw.dislikesAdd ?? raw.dislikes),
+    constraintsAdd: cleanStringArray(raw.constraintsAdd ?? raw.constraints),
+    budget: {
+      dailyCny: num(raw.dailyCny),
+      totalCny: num(raw.totalBudgetCny ?? raw.totalCny),
+      hotelPerNightCny: num(raw.hotelBudgetPerNightCny ?? raw.hotelPerNightCny),
+    },
+    pace,
+    prefer: normalizePrefer(raw.prefer),
+  };
 }
 
 function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -259,6 +322,37 @@ const server = http.createServer(async (req, res) => {
         amapEnabled: Boolean(AMAP_JS_KEY),
         amapServiceConfigured: Boolean(AMAP_SERVICE_KEY),
       });
+      return;
+    }
+
+    if (pathname === '/api/memory' && req.method === 'GET') {
+      const tenant = resolveTenantContext(req, searchParams);
+      sendJson(res, 200, {
+        tenant,
+        memory: memoryService.recall(tenant),
+      });
+      return;
+    }
+
+    if (pathname === '/api/memory/events' && req.method === 'GET') {
+      const tenant = resolveTenantContext(req, searchParams);
+      sendJson(res, 200, {
+        tenant,
+        events: memoryService.listEvents(tenant),
+      });
+      return;
+    }
+
+    if (pathname === '/api/memory/patch' && req.method === 'POST') {
+      const body = await readBody(req);
+      const tenant = resolveTenantContext(req, searchParams, body);
+      const memory = memoryService.applyPatch(
+        tenant,
+        buildManualMemoryPatch(body),
+        'manual_patch',
+        { requestId },
+      );
+      sendJson(res, 200, { tenant, memory });
       return;
     }
 
@@ -445,11 +539,13 @@ const server = http.createServer(async (req, res) => {
       const city = searchParams.get('city') ?? '';
       const hours = searchParams.get('hours') ? toNum(searchParams.get('hours'), 'hours') : 4;
       const preferRaw = searchParams.get('prefer') ?? 'mixed';
-      const prefer = preferRaw as Prefer;
-      if (!['mixed', 'park', 'attraction'].includes(prefer)) {
+      if (!['mixed', 'park', 'attraction'].includes(preferRaw)) {
         sendJson(res, 400, { error: 'prefer 只能是 mixed|park|attraction' });
         return;
       }
+      const tenant = resolveTenantContext(req, searchParams);
+      const memory = memoryService.recall(tenant);
+      const prefer = preferWithMemory(preferRaw, memory);
       let result = agent.planRoute(lat, lon, city, hours, prefer);
       let routeCandidates = pickLocalRouteCandidates(agent, city, prefer);
       let planningSource = 'local';
@@ -502,6 +598,7 @@ const server = http.createServer(async (req, res) => {
         hours,
         prefer,
         candidates: routeCandidates,
+        memory,
       });
       if (aiRoute && aiRoute.stops.length > 0) {
         result = aiRoute;
@@ -555,6 +652,9 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === '/api/agent/plan' && req.method === 'POST') {
       const body = (await readBody(req)) as {
+        tenantId?: string;
+        userId?: string;
+        sessionId?: string;
         lat?: number;
         lon?: number;
         city?: string;
@@ -571,32 +671,49 @@ const server = http.createServer(async (req, res) => {
         log('warn', 'agent.plan.invalid_input', requestMeta);
         return;
       }
+      const tenant = resolveTenantContext(req, searchParams, body);
+      const memory = memoryService.recall(tenant);
+      const bodyInterests = cleanStringArray(body.interests);
+      const bodyHabits = cleanStringArray(body.habits);
+      const totalBudgetRaw = Number(body.totalBudgetCny);
+      const hotelBudgetRaw = Number(body.hotelBudgetPerNight);
       log('info', 'agent.plan.input', {
         ...requestMeta,
+        tenantId: tenant.tenantId,
+        userId: tenant.userId,
         city: body.city ?? '',
         days: body.days ?? 2,
         dailyHours: body.dailyHours ?? 6,
-        prefer: body.prefer ?? 'mixed',
+        prefer: preferWithMemory(body.prefer ?? 'mixed', memory),
       });
-      const result = await orchestrator.run({
+      const planInput = {
+        tenant,
+        memory,
         lat: Number(body.lat),
         lon: Number(body.lon),
         city: (body.city ?? '').trim(),
         days: Math.max(1, Math.min(7, Math.floor(Number(body.days ?? 2)))),
         dailyHours: Math.max(2, Math.min(12, Number(body.dailyHours ?? 6))),
-        interests: Array.isArray(body.interests)
-          ? body.interests.map((s) => String(s).trim()).filter(Boolean)
-          : [],
-        habits: Array.isArray(body.habits)
-          ? body.habits.map((s) => String(s).trim()).filter(Boolean)
-          : [],
-        totalBudgetCny: Number(body.totalBudgetCny ?? 3000),
-        hotelBudgetPerNight: Number(body.hotelBudgetPerNight ?? 600),
-        prefer: (body.prefer ?? 'mixed') as Prefer,
-      });
+        interests: mergeStringArrays(memory.preferences.interests, bodyInterests),
+        habits: mergeStringArrays(memory.preferences.habits, memory.preferences.constraints, bodyHabits),
+        totalBudgetCny:
+          Number.isFinite(totalBudgetRaw) && totalBudgetRaw > 0
+            ? totalBudgetRaw
+            : memory.preferences.budget.totalCny ?? 3000,
+        hotelBudgetPerNight:
+          Number.isFinite(hotelBudgetRaw) && hotelBudgetRaw > 0
+            ? hotelBudgetRaw
+            : memory.preferences.budget.hotelPerNightCny ?? 600,
+        prefer: preferWithMemory(body.prefer ?? 'mixed', memory),
+      };
+      const result = await orchestrator.run(planInput);
+      memoryService.recordAgentPlan(tenant, planInput, result);
+      result.executionTrace.push('memory_write_agent: recorded planning event');
       sendJson(res, 200, result);
       log('info', 'agent.plan.output', {
         ...requestMeta,
+        tenantId: tenant.tenantId,
+        userId: tenant.userId,
         stops: result.route.stops.length,
         hotels: result.hotels.length,
         routeSource: result.route.source,
@@ -607,6 +724,9 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === '/api/preference-chat' && req.method === 'POST') {
       const body = (await readBody(req)) as {
+        tenantId?: string;
+        userId?: string;
+        sessionId?: string;
         message?: string;
         interests?: string[];
         habits?: string[];
@@ -618,15 +738,16 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { error: 'message 为必填' });
         return;
       }
+      const tenant = resolveTenantContext(req, searchParams, body);
+      const memory = memoryService.recall(tenant);
+      const bodyInterests = cleanStringArray(body.interests);
+      const bodyHabits = cleanStringArray(body.habits);
       const result = await resolvePreferenceChat({
         message,
-        interests: Array.isArray(body.interests)
-          ? body.interests.map((s) => String(s).trim()).filter(Boolean)
-          : [],
-        habits: Array.isArray(body.habits)
-          ? body.habits.map((s) => String(s).trim()).filter(Boolean)
-          : [],
-        prefer: (body.prefer ?? 'mixed') as Prefer,
+        interests: mergeStringArrays(memory.preferences.interests, bodyInterests),
+        habits: mergeStringArrays(memory.preferences.habits, memory.preferences.constraints, bodyHabits),
+        prefer: preferWithMemory(body.prefer ?? 'mixed', memory),
+        memory,
         history: Array.isArray(body.history)
           ? body.history
               .map((item): PreferenceChatMessage => ({
@@ -636,9 +757,18 @@ const server = http.createServer(async (req, res) => {
               .filter((item) => item.text)
           : [],
       });
-      sendJson(res, 200, result);
+      const updatedMemory = memoryService.applyPatch(tenant, result.memoryPatch, 'preference_patch', {
+        message,
+        aiApplied: result.aiApplied,
+      });
+      sendJson(res, 200, {
+        ...result,
+        memory: updatedMemory,
+      });
       log('info', 'preference.chat.output', {
         ...requestMeta,
+        tenantId: tenant.tenantId,
+        userId: tenant.userId,
         aiApplied: result.aiApplied,
         interests: result.interests.length,
         habits: result.habits.length,

@@ -1,8 +1,11 @@
 import type { MapHotelOption, MapProvider } from './map-provider.js';
+import type { TenantContext, UserMemory } from './memory-types.js';
 import { TravelPlannerAgent } from './planner.js';
 import type { Place, Prefer, RouteResult, RouteStop } from './types.js';
 
 export type AgentPlanningInput = {
+  tenant?: TenantContext;
+  memory?: UserMemory;
   lat: number;
   lon: number;
   city: string;
@@ -85,6 +88,19 @@ function inferKeywordsByInterests(interests: string[]): string[] {
     kws.push('亲子');
   }
   return [...new Set(kws)];
+}
+
+function mergeUnique(...groups: string[][]): string[] {
+  const next = new Map<string, string>();
+  for (const group of groups) {
+    for (const item of group) {
+      const cleaned = String(item || '').trim();
+      if (cleaned) {
+        next.set(cleaned.toLowerCase(), cleaned);
+      }
+    }
+  }
+  return [...next.values()];
 }
 
 function planRouteFromCandidates(
@@ -229,8 +245,16 @@ export class MultiAgentOrchestrator {
     ];
   }
 
-  async run(input: AgentPlanningInput): Promise<AgentPlanResult> {
+  async run(rawInput: AgentPlanningInput): Promise<AgentPlanResult> {
     const trace: string[] = [];
+    const input = this.applyMemory(rawInput);
+    if (rawInput.memory) {
+      trace.push(
+        `memory_recall_agent: loaded interests=${rawInput.memory.preferences.interests.length}, habits=${rawInput.memory.preferences.habits.length}`,
+      );
+    } else {
+      trace.push('memory_recall_agent: no long-term memory attached');
+    }
     const totalHours = Number((input.days * input.dailyHours).toFixed(1));
 
     trace.push('spot_research_agent: collecting nearby POIs');
@@ -444,6 +468,9 @@ export class MultiAgentOrchestrator {
                 dailyHours: args.input.dailyHours,
                 interests: args.input.interests,
                 habits: args.input.habits,
+                dislikes: args.input.memory?.preferences.dislikes ?? [],
+                constraints: args.input.memory?.preferences.constraints ?? [],
+                pace: args.input.memory?.preferences.pace ?? 'normal',
                 totalBudgetCny: args.input.totalBudgetCny,
                 hotelBudgetPerNight: args.input.hotelBudgetPerNight,
                 prefer: args.input.prefer,
@@ -503,5 +530,27 @@ export class MultiAgentOrchestrator {
     } catch {
       return null;
     }
+  }
+
+  private applyMemory(input: AgentPlanningInput): AgentPlanningInput {
+    const memory = input.memory;
+    if (!memory) {
+      return input;
+    }
+    const preferences = memory.preferences;
+    return {
+      ...input,
+      interests: mergeUnique(preferences.interests, input.interests),
+      habits: mergeUnique(preferences.habits, preferences.constraints, input.habits),
+      totalBudgetCny:
+        Number.isFinite(input.totalBudgetCny) && input.totalBudgetCny > 0
+          ? input.totalBudgetCny
+          : preferences.budget.totalCny ?? 3000,
+      hotelBudgetPerNight:
+        Number.isFinite(input.hotelBudgetPerNight) && input.hotelBudgetPerNight > 0
+          ? input.hotelBudgetPerNight
+          : preferences.budget.hotelPerNightCny ?? 600,
+      prefer: input.prefer === 'mixed' ? preferences.prefer : input.prefer,
+    };
   }
 }

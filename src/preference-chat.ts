@@ -1,5 +1,6 @@
 import type { Prefer } from './types.js';
 import { log } from './logger.js';
+import type { MemoryBudget, MemoryPatch, TravelPace, UserMemory } from './memory-types.js';
 
 export type PreferenceChatMessage = {
   role: 'assistant' | 'user';
@@ -11,6 +12,7 @@ export type PreferenceChatInput = {
   interests: string[];
   habits: string[];
   prefer: Prefer;
+  memory?: UserMemory;
   history?: PreferenceChatMessage[];
 };
 
@@ -18,15 +20,16 @@ export type PreferenceChatResult = {
   reply: string;
   interests: string[];
   habits: string[];
+  dislikes: string[];
+  constraints: string[];
+  budget: MemoryBudget;
+  pace: TravelPace;
   prefer: Prefer;
   aiApplied: boolean;
+  memoryPatch: MemoryPatch;
 };
 
-type PreferencePatch = {
-  interests: string[];
-  habits: string[];
-  prefer?: Prefer;
-};
+type PreferencePatch = MemoryPatch;
 
 export class PreferenceChatAiError extends Error {
   statusCode: number;
@@ -57,14 +60,23 @@ function appendValues(current: string[], values: string[]): string[] {
 }
 
 function mergeResult(input: PreferenceChatInput, patch: PreferencePatch, reply: string, aiApplied: boolean): PreferenceChatResult {
-  const interests = appendValues(input.interests, patch.interests);
-  const habits = appendValues(input.habits, patch.habits);
+  const interests = appendValues(input.interests, patch.interestsAdd ?? []);
+  const habits = appendValues(input.habits, patch.habitsAdd ?? []);
+  const memoryPrefs = input.memory?.preferences;
   return {
     reply,
     interests,
     habits,
+    dislikes: appendValues(memoryPrefs?.dislikes ?? [], patch.dislikesAdd ?? []),
+    constraints: appendValues(memoryPrefs?.constraints ?? [], patch.constraintsAdd ?? []),
+    budget: {
+      ...(memoryPrefs?.budget ?? {}),
+      ...(patch.budget ?? {}),
+    },
+    pace: patch.pace ?? memoryPrefs?.pace ?? 'normal',
     prefer: patch.prefer ?? input.prefer,
     aiApplied,
+    memoryPatch: patch,
   };
 }
 
@@ -91,23 +103,55 @@ function isFilledAiKey(value: string | undefined): value is string {
 }
 
 function parseAiPatch(content: string): null | { patch: PreferencePatch; reply: string } {
+  const num = (value: unknown): number | undefined => {
+    const parsed = typeof value === 'number' ? value : Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+  };
+
   const tryParse = (raw: string): null | { patch: PreferencePatch; reply: string } => {
     const parsed = JSON.parse(raw) as {
       reply?: unknown;
       interests_add?: unknown;
       habits_add?: unknown;
+      dislikes_add?: unknown;
+      constraints_add?: unknown;
+      travel_style_add?: unknown;
+      home_city?: unknown;
+      language?: unknown;
+      pace?: unknown;
       prefer?: unknown;
+      budget_daily_cny?: unknown;
+      budget_total_cny?: unknown;
+      hotel_budget_per_night_cny?: unknown;
     };
     const prefer =
       parsed.prefer === 'park' || parsed.prefer === 'attraction' || parsed.prefer === 'mixed'
         ? parsed.prefer
         : undefined;
+    const pace =
+      parsed.pace === 'relaxed' || parsed.pace === 'normal' || parsed.pace === 'packed'
+        ? parsed.pace
+        : undefined;
     const reply = typeof parsed.reply === 'string' ? parsed.reply.trim() : '';
+    const budget = {
+      dailyCny: num(parsed.budget_daily_cny),
+      totalCny: num(parsed.budget_total_cny),
+      hotelPerNightCny: num(parsed.hotel_budget_per_night_cny),
+    };
     return {
       reply,
       patch: {
-        interests: splitClean(parsed.interests_add),
-        habits: splitClean(parsed.habits_add),
+        profile: {
+          homeCity: typeof parsed.home_city === 'string' ? parsed.home_city.trim() : undefined,
+          language: typeof parsed.language === 'string' ? parsed.language.trim() : undefined,
+          travelStyleAdd: splitClean(parsed.travel_style_add),
+        },
+        interestsAdd: splitClean(parsed.interests_add),
+        habitsAdd: splitClean(parsed.habits_add),
+        dislikesAdd: splitClean(parsed.dislikes_add),
+        constraintsAdd: splitClean(parsed.constraints_add),
+        budget,
+        pace,
         prefer,
       },
     };
@@ -163,12 +207,22 @@ async function callAi(input: PreferenceChatInput): Promise<{ patch: PreferencePa
                 reply: '给用户的中文回复，简短自然，不要每轮都用同一句开头，并继续追问一个最有价值的问题',
                 interests_add: ['新增兴趣标签，短词，不要重复现有标签'],
                 habits_add: ['新增习惯/限制，短词，不要重复现有限制'],
+                dislikes_add: ['用户明确不喜欢或想避开的内容，短词'],
+                constraints_add: ['硬约束，如带娃、老人同行、轮椅、过敏、必须地铁等'],
+                travel_style_add: ['稳定旅行风格，如松弛、小众、文化向、亲子'],
+                budget_daily_cny: '数字或 null',
+                budget_total_cny: '数字或 null',
+                hotel_budget_per_night_cny: '数字或 null',
+                home_city: '常住城市或 null',
+                language: '偏好语言或 null',
+                pace: 'relaxed | normal | packed | null',
                 prefer: 'mixed | park | attraction | null',
               },
               current: {
                 interests: input.interests,
                 habits: input.habits,
                 prefer: input.prefer,
+                longTermMemory: input.memory ?? null,
               },
               recentHistory: (input.history ?? []).slice(-8),
               latestUserMessage: input.message,
