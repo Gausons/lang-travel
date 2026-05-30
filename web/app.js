@@ -9,6 +9,15 @@ function showFatal(message) {
   el.textContent = `页面初始化失败: ${message}`;
 }
 
+function isOpaqueCrossOriginScriptError(event) {
+  return (
+    event.message === 'Script error.' &&
+    !event.error &&
+    (!event.filename || event.filename === '') &&
+    (!event.lineno || event.lineno === 0)
+  );
+}
+
 const state = {
   map: null,
   amapReady: false,
@@ -267,7 +276,13 @@ function loadAmapSdk(key, securityJsCode) {
       key,
     )}&plugin=AMap.Scale,AMap.ToolBar`;
     script.async = true;
-    script.onload = () => resolve(window.AMap);
+    script.onload = () => {
+      if (window.AMap) {
+        resolve(window.AMap);
+        return;
+      }
+      reject(new Error('高德 JS SDK 已加载但未初始化，请检查 AMAP_JS_KEY、AMAP_SECURITY_JS_CODE 和域名白名单'));
+    };
     script.onerror = () => reject(new Error('高德 JS SDK 加载失败'));
     document.head.appendChild(script);
   });
@@ -788,6 +803,11 @@ async function boot() {
 }
 
 window.addEventListener('error', (e) => {
+  if (isOpaqueCrossOriginScriptError(e)) {
+    setChip('chip-map', '地图: 第三方脚本异常（检查高德 JS Key/安全配置）');
+    console.warn('Ignored opaque cross-origin script error. Check AMap JS key/security/domain config.', e);
+    return;
+  }
   showFatal(e.message || '未知脚本错误');
 });
 window.addEventListener('unhandledrejection', (e) => {
