@@ -1,43 +1,118 @@
-# Travel Planner Agent (TypeScript)
+# Lang Travel
 
-一个本地可运行的游玩规划 Agent，支持：
+一个本地运行的旅行规划 Agent，用 TypeScript 构建。它可以录入和查询点位、查找附近公园、生成步行路线、调用地图服务拉取实时 POI，并通过 AI 做路线优化、偏好访谈和多 Agent 行程规划。
 
-1. 周边景点/公园录入
-2. “散步”场景下查找附近小公园
-3. “陌生地点”场景下自动规划可行路线
+## 功能概览
+
+- CLI：录入点位、查看本地点位、查找附近公园、生成路线、简单对话调用。
+- Web UI：地图可视化、当前位置回填城市、点位录入、公园检索、路线规划、一键 Agent 规划。
+- 地图 Provider：支持高德和 Google Maps，缺少或调用失败时保留本地数据兜底。
+- AI 能力：AI 路线排序、偏好聊天、旅行记忆更新、多 Agent 行程/酒店/预算编排。
+- 移动端：Expo / React Native 客户端，通过本地 Web 服务访问后端能力，避免暴露敏感密钥。
+- 长期记忆：按 tenant/user 保存旅行偏好、预算、节奏、雷点和历史规划事件。
 
 ## 技术栈
 
 - Node.js 18+
-- TypeScript
-- `tsx` 直接运行 TS
-- 移动端：Expo SDK 55 + React Native 0.83 + TypeScript（本机移动端调试建议 Node.js 20.19+）
+- TypeScript + ESM
+- `tsx` 开发运行
+- 静态 Web：`web/`
+- 移动端：Expo SDK 55 + React Native 0.83 + TypeScript
+- 包管理器：`pnpm`
 
-## 项目结构
-
-- `src/types.ts`: 领域类型定义
-- `src/store.ts`: 点位数据读写与初始化
-- `src/planner.ts`: 规划核心逻辑（附近公园、路线、chat 意图）
-- `src/multi-agent.ts`: 多 Agent 编排（行程研究、酒店多源比价、预算优化）
-- `src/cli.ts`: 命令行参数解析和命令分发
-- `src/agent.ts`: 入口文件（错误处理 + 启动 CLI）
-- `src/index.ts`: 复用导出（便于后续接 API）
-- `web/`: 现有 Web 可视化页面
-- `apps/mobile/`: Expo / React Native iOS + Android 客户端
-
-## 安装依赖
-
-```bash
-pnpm install
-```
+移动端本机调试建议使用 Node.js 20.19+。
 
 ## 快速开始
 
 ```bash
+pnpm install
 pnpm dev list
 ```
 
-## 录入点位
+启动 Web 服务：
+
+```bash
+pnpm dev:web
+```
+
+默认访问：
+
+```text
+http://localhost:3000
+```
+
+构建后运行：
+
+```bash
+pnpm build
+pnpm start -- list
+pnpm start:web
+```
+
+## 项目结构
+
+- `src/agent.ts`：CLI 入口错误处理。
+- `src/cli.ts`：命令行参数解析和命令分发。
+- `src/server.ts`：HTTP API 和静态 Web 服务。
+- `src/types.ts`：共享领域类型。
+- `src/store.ts`：本地点位存储。
+- `src/planner.ts`：核心规划逻辑和基础 chat 意图。
+- `src/map-provider.ts`：地图 Provider 接口和通用类型。
+- `src/map-providers.ts`：地图 Provider 注册和选择。
+- `src/amap.ts`、`src/google-maps.ts`：高德和 Google Maps 实现。
+- `src/ai-route-planner.ts`：AI 辅助路线排序。
+- `src/preference-chat.ts`：AI 偏好访谈和偏好提取。
+- `src/memory-store.ts`、`src/memory-service.ts`：长期记忆读写和事件记录。
+- `src/multi-agent.ts`：多 Agent 行程、酒店和预算编排。
+- `web/`：浏览器 UI。
+- `apps/mobile/`：Expo / React Native 客户端。
+- `data/places.json`：本地点位数据。
+- `data/tenants/`：按租户和用户保存的旅行记忆。
+
+## 环境变量
+
+项目根目录的 `.env` 会在启动 `src/server.ts` 时自动加载。可以从 `.env.example` 复制一份本地配置：
+
+```bash
+cp .env.example .env
+```
+
+常用变量：
+
+```dotenv
+MAP_PROVIDER=amap
+AMAP_KEY=你的高德Web服务Key
+AMAP_JS_KEY=你的高德JSAPI Key
+AMAP_SECURITY_JS_CODE=
+GOOGLE_MAPS_API_KEY=
+OPENAI_API_KEY=
+OPENAI_MODEL=gpt-4.1-mini
+OPENAI_BASE_URL=https://api.openai.com
+MEMORY_MAX_LINES=300
+LOG_LEVEL=info
+PORT=3000
+```
+
+说明：
+
+- `MAP_PROVIDER` 可选 `amap` 或 `google`，默认使用高德。
+- `AMAP_KEY` 用于后端高德 Web 服务能力，例如 POI、逆地理编码和步行路线。
+- `AMAP_JS_KEY` 用于 Web 页面中的高德 JS 地图渲染；未配置时会尝试回退到 `AMAP_KEY`。
+- `GOOGLE_MAPS_API_KEY` 在 `MAP_PROVIDER=google` 时使用。
+- `OPENAI_API_KEY` 配置后启用 AI 路线优化、多 Agent 全局优化和偏好聊天。
+- `OPENAI_BASE_URL` 支持 OpenAI 兼容接口，会自动补全到 `/v1/chat/completions`。
+- 不要把真实密钥提交到仓库。
+
+## CLI 用法
+
+查看本地点位：
+
+```bash
+pnpm dev list
+pnpm dev list --city 上海
+```
+
+录入点位：
 
 ```bash
 pnpm dev add \
@@ -51,13 +126,13 @@ pnpm dev add \
   --score 4.6
 ```
 
-## 查找附近小公园（散步）
+查找附近公园：
 
 ```bash
 pnpm dev parks --lat 31.2304 --lon 121.4737 --radius-km 8
 ```
 
-## 陌生地点自动规划路线
+规划路线：
 
 ```bash
 pnpm dev route \
@@ -68,7 +143,7 @@ pnpm dev route \
   --prefer mixed
 ```
 
-## 对话方式调用
+对话方式调用基础 Agent：
 
 ```bash
 pnpm dev chat \
@@ -79,110 +154,114 @@ pnpm dev chat \
   --radius-km 5
 ```
 
-```bash
-pnpm dev chat \
-  --message "我第一次来这边，帮我规划一个路线" \
-  --lat 31.2304 \
-  --lon 121.4737 \
-  --city 上海 \
-  --hours 5
-```
+## Web 与 API
 
-## 构建与运行
+启动：
 
 ```bash
-pnpm build
-pnpm start -- list
-```
-
-## 可视化页面
-
-启动 Web 服务：
-
-```bash
-export AMAP_KEY=你的高德Web服务Key
-export AMAP_JS_KEY=你的高德JSAPI Key
 pnpm dev:web
 ```
 
-或写入项目根目录 `.env`（服务会自动加载）：
+Web 页面支持：
 
-```bash
-MAP_PROVIDER=amap(可选：amap/google，默认amap)
-AMAP_KEY=你的高德Web服务Key(用于后端地图Provider，如逆地理编码/路线/POI)
-AMAP_JS_KEY=你的高德JSAPI Key(用于前端地图渲染)
-AMAP_SECURITY_JS_CODE=你的安全密钥(可选)
-GOOGLE_MAPS_API_KEY=你的Google Maps Platform API Key(MAP_PROVIDER=google时使用)
-OPENAI_API_KEY=你的OpenAI API Key(可选，用于AI全局优化决策)
-OPENAI_MODEL=gpt-4.1-mini(可选)
-LOG_LEVEL=info(debug/info/warn/error)
-```
+- 读取当前位置并通过 `/api/regeo` 回填城市。
+- 查询 `/api/places`、`/api/parks` 并在地图上展示。
+- 通过 `/api/route` 生成路线和步行折线。
+- 通过 `/api/preference-chat` 访谈旅行偏好并写入长期记忆。
+- 通过 `/api/agent/plan` 生成多天行程、酒店候选和预算方案。
+- 读取 `/api/memory` 展示当前用户偏好记忆。
 
-打开：`http://localhost:3000`
+主要接口：
 
-页面支持：
-
-- 录入景点/公园
-- 查询附近散步公园
-- 生成陌生地点路线规划
-- Agent 一键自主规划（行程 + 酒店筛选比价）
-- 对话式调用 Agent
-- 查看当前城市已录入点位
-
-## 地图服务 Provider 接入说明
-
-- 后端地图数据服务已抽象为可插拔 Provider（`src/map-provider.ts`）
-- 使用 `MAP_PROVIDER=amap` 时，需要高德开放平台 Web 服务 Key（环境变量：`AMAP_KEY`）
-- 使用 `MAP_PROVIDER=google` 时，需要 Google Maps Platform API Key（环境变量：`GOOGLE_MAPS_API_KEY`）
-- Web 地图展示当前仍使用高德 JS API，需要 JS API Key（环境变量：`AMAP_JS_KEY`，未设置时回退用 `AMAP_KEY`）
-- 如启用了高德安全密钥，可配置：`AMAP_SECURITY_JS_CODE`
-- 已接入能力：
-  - `/api/parks`：优先调用当前地图 Provider 周边公园检索，失败自动回退本地数据
-- `/api/route`：对本地规划结果的交通段，按当前地图 Provider 步行路线时长做校准
-- `/api/agent/plan`：多 Agent 自主规划（多源酒店比价 + 最经济方案）
-  - 若配置 `OPENAI_API_KEY`：由 AI 基于用户习惯/预算/候选信息做全局优化
-  - 若 AI 调用失败：自动回退贪心结果（稳定兜底）
-  - `/api/health`：返回 `mapProvider`、`mapProviderEnabled` 字段，方便检查当前 Provider 是否生效
+- `GET /api/health`：服务健康状态和当前地图 Provider。
+- `GET /api/client-config`：前端地图渲染所需的非服务端配置。
+- `GET /api/mobile/config`：移动端非敏感能力开关。
+- `GET /api/regeo?lat=...&lon=...`：逆地理编码。
+- `GET /api/places?lat=...&lon=...&city=...&radiusKm=...`：点位列表，优先实时地图数据。
+- `POST /api/places`：录入本地点位。
+- `GET /api/parks?lat=...&lon=...&city=...&radiusKm=...`：附近公园。
+- `GET /api/route?lat=...&lon=...&city=...&hours=4&prefer=mixed`：路线规划。
+- `POST /api/chat`：基础 chat 意图调用。
+- `POST /api/preference-chat`：AI 偏好访谈并更新记忆。
+- `GET /api/memory`：读取当前 tenant/user 的记忆。
+- `GET /api/memory/events`：读取记忆事件。
+- `POST /api/memory/patch`：手动写入偏好补丁。
+- `POST /api/agent/plan`：多 Agent 自主规划。
 
 示例：
 
 ```bash
-export MAP_PROVIDER=amap
-export AMAP_KEY=你的key
 curl "http://127.0.0.1:3000/api/health"
 curl "http://127.0.0.1:3000/api/parks?lat=31.2304&lon=121.4737&city=%E4%B8%8A%E6%B5%B7&radiusKm=5"
 ```
 
-切换 Google Maps：
+## 地图 Provider
+
+后端地图服务通过 `MapProvider` 抽象接入，业务层依赖统一能力：
+
+- `searchNearbySpots`
+- `searchNearbyParks`
+- `searchNearbyHotels`
+- `walkingRoute`
+- `reverseGeocode`
+
+使用高德：
 
 ```bash
-export MAP_PROVIDER=google
-export GOOGLE_MAPS_API_KEY=你的Google Maps Platform API Key
+MAP_PROVIDER=amap
+AMAP_KEY=你的高德Web服务Key
+AMAP_JS_KEY=你的高德JS API Key
 pnpm dev:web
 ```
 
-新增 Provider 时，实现 `MapProvider` 接口并通过 `registerMapProvider(name, factory)` 或在 `src/map-providers.ts` 注册即可。业务层只依赖统一的 `searchNearbySpots`、`searchNearbyParks`、`searchNearbyHotels`、`walkingRoute`、`reverseGeocode` 能力。
-
-## 数据文件
-
-- 点位持久化在 `data/places.json`
-- 默认不再预置写死景点；页面会优先按当前位置从高德拉取实时点位
-
-## React Native 多端客户端
-
-移动端工程位于 `apps/mobile`，使用现有 Node Web 服务作为远端代理。服务端继续保存 `AMAP_KEY`、`OPENAI_API_KEY` 等敏感密钥；移动端只配置 API 地址和高德 iOS/Android 地图展示 Key。
-
-先启动代理服务：
+使用 Google Maps：
 
 ```bash
-export AMAP_KEY=你的高德Web服务Key
-export OPENAI_API_KEY=你的OpenAI API Key # 可选
+MAP_PROVIDER=google
+GOOGLE_MAPS_API_KEY=你的 Google Maps Platform API Key
 pnpm dev:web
 ```
 
-移动端环境变量写入 `apps/mobile/.env.local`：
+新增 Provider 时，实现 `MapProvider` 接口，并在 `src/map-providers.ts` 中注册即可。
+
+## AI 与偏好记忆
+
+配置 `OPENAI_API_KEY` 后会启用以下能力：
+
+- `/api/route`：基于候选点位和用户记忆做 AI 路线重排。
+- `/api/preference-chat`：从自然语言里提取兴趣、习惯、预算、节奏、偏好类型和雷点。
+- `/api/agent/plan`：在行程、酒店和预算候选之间做全局优化。
+
+记忆数据按 tenant/user 保存：
+
+```text
+data/tenants/<tenantId>/users/<userId>/memory.md
+data/tenants/<tenantId>/users/<userId>/memory-events.md
+```
+
+接口会从 header、query 或 body 读取上下文：
+
+```text
+x-tenant-id
+x-user-id
+x-session-id
+```
+
+未传时默认使用 `default` / `local-user`。`MEMORY_MAX_LINES` 控制记忆文件保留行数，当前硬上限为 300。
+
+## 移动端
+
+移动端位于 `apps/mobile`，通过本地 Web 服务访问后端能力。服务端继续保存高德 Web 服务 Key、OpenAI Key 等敏感密钥；移动端只放 API 地址和原生地图展示 Key。
+
+先启动服务：
 
 ```bash
+pnpm dev:web
+```
+
+在 `apps/mobile/.env.local` 写入：
+
+```dotenv
 # iOS 模拟器访问本机服务
 EXPO_PUBLIC_API_BASE_URL=http://127.0.0.1:3000
 
@@ -192,33 +271,40 @@ EXPO_PUBLIC_API_BASE_URL=http://127.0.0.1:3000
 # 真机调试时改为 Mac 的局域网 IP，例如：
 # EXPO_PUBLIC_API_BASE_URL=http://192.168.1.20:3000
 
-# 高德移动端地图 Key，通过 Expo config plugin 写入原生配置
 AMAP_IOS_KEY=你的高德iOS移动端Key
 AMAP_ANDROID_KEY=你的高德Android移动端Key
 ```
 
-本机运行：
+运行：
 
 ```bash
 pnpm mobile:start
 pnpm mobile:ios
 pnpm mobile:android
+pnpm mobile:typecheck
 ```
 
-`pnpm mobile:ios` / `pnpm mobile:android` 会使用 Expo Prebuild 生成本地原生工程；`ios/` 和 `android/` 已按生成物处理并加入忽略列表。
+`pnpm mobile:ios` 和 `pnpm mobile:android` 会触发 Expo 原生工程生成；`ios/`、`android/`、`.expo/` 和本地 env 文件都按本地生成物处理。
 
-移动端首版支持：
+## 数据与安全
 
-- 定位并用 `/api/regeo` 回填城市
-- 地图展示当前位置、点位、公园和路线折线
-- 查询 `/api/places`、`/api/parks`
-- 调用 `/api/route` 生成路线
-- 调用 `/api/agent/plan` 生成 Agent 自主规划和酒店比价
+- `data/places.json` 是本地点位数据，除非明确需要，不要随意覆盖。
+- `data/tenants/` 是用户偏好和规划事件记忆。
+- 根目录 `.env` 和 `apps/mobile/.env.local` 都应保持本地私有。
+- 移动端配置接口只返回非敏感开关，不返回后端服务 Key。
 
-移动端安全配置接口：
+## 常用验证
+
+修改根目录 TypeScript 后：
 
 ```bash
-curl "http://127.0.0.1:3000/api/mobile/config"
+pnpm build
 ```
 
-该接口只返回 `apiVersion`、`amapEnabled`、`amapServiceConfigured`、`aiPlanningEnabled` 等非敏感开关，不返回高德 Web 服务 Key、OpenAI Key 或安全密钥。
+修改移动端后：
+
+```bash
+pnpm mobile:typecheck
+```
+
+目前没有独立单元测试脚本；改动 CLI、API、Web 或移动端流程时，优先做对应的手动检查。
