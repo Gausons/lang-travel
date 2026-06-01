@@ -1,5 +1,6 @@
 import type { MapHotelOption, MapProvider } from './map-provider.js';
 import type { TenantContext, UserMemory } from './memory-types.js';
+import { resolveChatCompletionsUrl } from './openai-url.js';
 import { TravelPlannerAgent } from './planner.js';
 import type { Place, Prefer, RouteResult, RouteStop } from './types.js';
 
@@ -499,7 +500,7 @@ export class MultiAgentOrchestrator {
     };
 
     try {
-      const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+      const resp = await fetch(resolveChatCompletionsUrl(process.env.OPENAI_BASE_URL), {
         method: 'POST',
         headers: {
           'content-type': 'application/json',

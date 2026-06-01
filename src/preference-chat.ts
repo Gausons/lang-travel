@@ -1,6 +1,7 @@
 import type { Prefer } from './types.js';
 import { log } from './logger.js';
 import type { MemoryBudget, MemoryPatch, TravelPace, UserMemory } from './memory-types.js';
+import { resolveChatCompletionsUrl } from './openai-url.js';
 
 export type PreferenceChatMessage = {
   role: 'assistant' | 'user';
@@ -80,23 +81,6 @@ function mergeResult(input: PreferenceChatInput, patch: PreferencePatch, reply: 
   };
 }
 
-function resolveChatCompletionsUrl(baseUrlRaw: string | undefined): string {
-  const base = (baseUrlRaw || '').trim().replace(/\/+$/, '');
-  if (!base) {
-    return 'https://api.openai.com/v1/chat/completions';
-  }
-  if (base.endsWith('/chat/completions')) {
-    return base;
-  }
-  if (base.endsWith('/models')) {
-    return `${base.slice(0, -'/models'.length)}/chat/completions`;
-  }
-  if (/\/v\d+$/.test(base)) {
-    return `${base}/chat/completions`;
-  }
-  return `${base}/v1/chat/completions`;
-}
-
 function isFilledAiKey(value: string | undefined): value is string {
   const key = value?.trim();
   return Boolean(key);
@@ -173,6 +157,33 @@ function parseAiPatch(content: string): null | { patch: PreferencePatch; reply: 
   }
 }
 
+function getErrorCause(error: unknown): unknown {
+  return error instanceof Error && 'cause' in error
+    ? (error as Error & { cause?: unknown }).cause
+    : undefined;
+}
+
+function describeAiCallError(error: unknown, endpoint: string): string {
+  const message = error instanceof Error ? error.message || error.name : 'unknown_error';
+  const cause = getErrorCause(error);
+  const causeRecord = cause && typeof cause === 'object' ? (cause as Record<string, unknown>) : {};
+  const causeCode = typeof causeRecord.code === 'string' ? causeRecord.code : '';
+  const causeMessage = typeof causeRecord.message === 'string' ? causeRecord.message : '';
+  const details = [
+    message,
+    causeCode ? `错误码 ${causeCode}` : '',
+    causeMessage && causeMessage !== message ? causeMessage : '',
+  ].filter(Boolean);
+
+  if (causeCode === 'ECONNREFUSED' || /ECONNREFUSED|fetch failed/i.test(`${message} ${causeMessage}`)) {
+    return `${details.join('；')}。无法连接到 ${endpoint}，请确认 OPENAI_BASE_URL 对应的本地 AI 服务已启动且端口正确。`;
+  }
+  if (causeCode === 'ENOTFOUND') {
+    return `${details.join('；')}。无法解析 OPENAI_BASE_URL 的主机名，请检查地址是否写错。`;
+  }
+  return `${details.join('；')}。请确认 OPENAI_BASE_URL 可访问，且上游 AI 服务状态正常。`;
+}
+
 async function callAi(input: PreferenceChatInput): Promise<{ patch: PreferencePatch; reply: string }> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!isFilledAiKey(apiKey)) {
@@ -181,9 +192,10 @@ async function callAi(input: PreferenceChatInput): Promise<{ patch: PreferencePa
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 12000);
+  const endpoint = resolveChatCompletionsUrl(process.env.OPENAI_BASE_URL);
   try {
     const model = process.env.OPENAI_MODEL || process.env.OPENAI_CHAT_MODEL || 'gpt-5.4-mini';
-    const response = await fetch(resolveChatCompletionsUrl(process.env.OPENAI_BASE_URL), {
+    const response = await fetch(endpoint, {
       method: 'POST',
       signal: controller.signal,
       headers: {
@@ -282,9 +294,10 @@ async function callAi(input: PreferenceChatInput): Promise<{ patch: PreferencePa
     }
     log('warn', 'preference.chat.ai_failed', {
       reason: err instanceof Error ? err.message || err.name : 'unknown_error',
+      endpoint,
     });
     throw new PreferenceChatAiError(
-      `偏好聊天 AI 调用异常: ${err instanceof Error ? err.message || err.name : 'unknown_error'}`,
+      `偏好聊天 AI 调用异常: ${describeAiCallError(err, endpoint)}`,
       502,
     );
   } finally {

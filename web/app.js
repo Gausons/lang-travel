@@ -27,6 +27,7 @@ const state = {
   routeLines: [],
   myMarker: null,
   source: 'local',
+  memory: null,
   preferenceChatMessages: [
     {
       id: 'welcome',
@@ -66,6 +67,122 @@ function splitList(value) {
     .split(',')
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function uniqueList(values) {
+  const next = new Map();
+  for (const value of values || []) {
+    const text = String(value || '').trim();
+    if (text) {
+      next.set(text.toLowerCase(), text);
+    }
+  }
+  return [...next.values()];
+}
+
+function formatTopList(values, max = 3) {
+  const list = uniqueList(values).slice(0, max);
+  return list.join('、');
+}
+
+function formatBudget(budget) {
+  const parts = [];
+  if (budget?.totalCny) {
+    parts.push(`总预算约 ¥${budget.totalCny}`);
+  }
+  if (budget?.hotelPerNightCny) {
+    parts.push(`酒店每晚约 ¥${budget.hotelPerNightCny}`);
+  }
+  if (budget?.dailyCny) {
+    parts.push(`每日约 ¥${budget.dailyCny}`);
+  }
+  return parts.join('，');
+}
+
+function translatePrefer(prefer) {
+  const labels = {
+    park: '偏自然公园',
+    attraction: '偏景点地标',
+    mixed: '自然和景点混合',
+  };
+  return labels[prefer] || labels.mixed;
+}
+
+function translatePace(pace) {
+  const labels = {
+    relaxed: '轻松',
+    normal: '适中',
+    packed: '紧凑',
+  };
+  return labels[pace] || labels.normal;
+}
+
+function hasMeaningfulMemory(memory) {
+  const preferences = memory?.preferences;
+  if (!preferences) {
+    return false;
+  }
+  return Boolean(
+    uniqueList(preferences.interests).length ||
+      uniqueList(preferences.habits).length ||
+      uniqueList(preferences.constraints).length ||
+      uniqueList(preferences.dislikes).length ||
+      uniqueList(memory.profile?.travelStyle).length ||
+      memory.profile?.homeCity ||
+      preferences.budget?.totalCny ||
+      preferences.budget?.hotelPerNightCny ||
+      preferences.budget?.dailyCny ||
+      (preferences.pace && preferences.pace !== 'normal') ||
+      (preferences.prefer && preferences.prefer !== 'mixed'),
+  );
+}
+
+function buildOpeningSuggestion(memory) {
+  if (!hasMeaningfulMemory(memory)) {
+    return '我还没有足够的偏好记忆。你可以直接说今天想去哪类地方、预算和不想踩的雷，我会先帮你收敛成可执行的旅行方案。';
+  }
+
+  const preferences = memory.preferences;
+  const ctx = getCtx();
+  const city = ctx.city || memory.profile?.homeCity || '';
+  const interests = formatTopList(preferences.interests);
+  const habits = formatTopList([
+    ...(preferences.habits || []),
+    ...(preferences.constraints || []),
+  ]);
+  const dislikes = formatTopList(preferences.dislikes, 2);
+  const travelStyle = formatTopList(memory.profile?.travelStyle);
+  const budget = formatBudget(preferences.budget);
+  const focus = interests || travelStyle || translatePrefer(preferences.prefer);
+  const cityText = city ? `今天可以从${city}出发，` : '';
+  const parts = [
+    `我已经记住了一些偏好：${focus ? `更适合围绕 ${focus}` : '适合先做轻量探索'}，节奏建议 ${translatePace(preferences.pace)}，路线偏向 ${translatePrefer(preferences.prefer)}。`,
+  ];
+
+  if (habits) {
+    parts.push(`我会把 ${habits} 纳入安排。`);
+  }
+  if (budget) {
+    parts.push(`预算按${budget}控制。`);
+  }
+  if (dislikes) {
+    parts.push(`同时尽量避开 ${dislikes}。`);
+  }
+  parts.push(`${cityText}我建议先生成一版低决策成本的行程，再根据你临时想法微调。可以直接点“一键规划”。`);
+  return parts.join('\n');
+}
+
+function updateOpeningSuggestion() {
+  const welcomeIndex = state.preferenceChatMessages.findIndex((message) => message.id === 'welcome');
+  const hasUserMessage = state.preferenceChatMessages.some((message) => message.role === 'user');
+  if (welcomeIndex < 0 || hasUserMessage) {
+    return;
+  }
+  state.preferenceChatMessages[welcomeIndex] = {
+    ...state.preferenceChatMessages[welcomeIndex],
+    text: buildOpeningSuggestion(state.memory),
+  };
+  renderPreferenceChat();
 }
 
 function renderPreferenceChat() {
@@ -318,8 +435,10 @@ async function api(url, options) {
 async function loadMemory() {
   try {
     const result = await api('/api/memory');
-    const preferences = result.memory?.preferences;
+    state.memory = result.memory || null;
+    const preferences = state.memory?.preferences;
     if (!preferences) {
+      updateOpeningSuggestion();
       return;
     }
     if (Array.isArray(preferences.interests) && preferences.interests.length > 0) {
@@ -341,6 +460,7 @@ async function loadMemory() {
     if (preferences.budget?.hotelPerNightCny) {
       $('agent-budget-hotel').value = String(preferences.budget.hotelPerNightCny);
     }
+    updateOpeningSuggestion();
   } catch {
     // 记忆加载失败不阻断地图和基础规划
   }
@@ -909,6 +1029,7 @@ async function boot() {
   } catch {
     // 自动定位失败时不弹框，保留手动点击“定位”
   }
+  updateOpeningSuggestion();
   await refreshPlaces();
 }
 

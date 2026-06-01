@@ -1,5 +1,6 @@
 import { log } from './logger.js';
 import type { UserMemory } from './memory-types.js';
+import { resolveChatCompletionsUrl } from './openai-url.js';
 import type { Place, Prefer, RouteResult, RouteStop } from './types.js';
 
 type AiRouteInput = {
@@ -43,24 +44,6 @@ function estimateTravel(distKm: number): { mode: 'walk' | 'transit'; minutes: nu
     mode: 'transit',
     minutes: Math.max(1, Math.floor((distKm / transitSpeedKmh) * 60) + 8),
   };
-}
-
-function resolveChatCompletionsUrl(baseUrlRaw: string | undefined): string {
-  const base = (baseUrlRaw || '').trim().replace(/\/+$/, '');
-  if (!base) {
-    return 'https://api.openai.com/v1/chat/completions';
-  }
-  if (base.endsWith('/chat/completions')) {
-    return base;
-  }
-  if (base.endsWith('/models')) {
-    const withoutModels = base.slice(0, -'/models'.length);
-    return `${withoutModels}/chat/completions`;
-  }
-  if (/\/v\d+$/.test(base)) {
-    return `${base}/chat/completions`;
-  }
-  return `${base}/v1/chat/completions`;
 }
 
 function parseAiRouteOutput(content: string): AiRouteOutput | null {
